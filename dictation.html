@@ -84,8 +84,13 @@ function shuffle(array) {
 
 function speakWord(word) {
     if (synth.speaking) synth.cancel();
+    const voices = synth.getVoices();
+    // 尝试选择 Google US English（如有）
+    const voice = voices.find(v => v.name.includes('Google US English')) || voices[0];
     const utter = new SpeechSynthesisUtterance(word);
     utter.lang = 'en-US';
+    if (voice) utter.voice = voice;
+    utter.rate = 0.9
     synth.speak(utter);
 }
 
