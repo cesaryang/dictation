@@ -151,19 +151,20 @@ function submitAnswer() {
     const input = document.getElementById('wordInput').value.trim().toLowerCase();
     const answer = shuffledWords[current].toLowerCase();
     total++;
-    // 记录已背单词
     let doneWords = getTodayDoneWords();
-    if (!doneWords.includes(shuffledWords[current])) {
-        doneWords.push(shuffledWords[current]);
-        saveTodayDoneWords(doneWords);
-    }
     if (input === answer) {
         document.getElementById('result').innerHTML = '<span class="correct">正确！</span>';
         correct++;
+        // 只在拼写正确时加入已背列表
+        if (!doneWords.includes(shuffledWords[current])) {
+            doneWords.push(shuffledWords[current]);
+            saveTodayDoneWords(doneWords);
+        }
     } else {
         document.getElementById('result').innerHTML =
             `<span class="wrong">错误</span>，你的输入：<b>${input}</b>，正确拼写是：<b>${shuffledWords[current]}</b>`;
         wrongWords.push({input: input, word: shuffledWords[current]});
+        // 错误时不加入已背列表
     }
     updateSummary();
     current++;
