@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>单词听写 Web 版</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        #wordInput { font-size: 1.2em; }
+        #result { margin-top: 10px; font-size: 1.2em; }
+        .correct { color: green; }
+        .wrong { color: red; }
+        #summary { margin-top: 20px; font-size: 1.1em; }
+        #startBtn { font-size: 1em; padding: 6px 16px; }
+    </style>
+</head>
+<body>
+    <h2>单词听写 Web 版</h2>
+    <div>
+        <input type="file" id="fileInput" accept=".txt">
+        <button id="startBtn" disabled>开始背词</button>
+    </div>
+    <div id="dictationArea" style="margin-top:20px; display:none;">
+        <span>请输入你听到的单词：</span>
+        <input type="text" id="wordInput" autocomplete="off">
+        <button id="repeatBtn" type="button">重听</button>
+        <div id="result"></div>
+    </div>
+    <div id="summary"></div>
+    <!-- 在 summary 下方增加一个错误单词列表的显示区域 -->
+    <div id="wrongList" style="margin-top:20px; color:#b22222;"></div>
+
+    <script>
+let words = [];
+let shuffledWords = [];
+let current = 0;
+let total = 0;
+let correct = 0;
+let isStarted = false;
+let wrongWords = [];
+const synth = window.speechSynthesis;
+
+// 获取当天日期字符串
+function getTodayStr() {
+    const now = new Date();
+    return now.getFullYear() + '-' + (now.getMonth()+1) + '-' + now.getDate();
+}
+
+// 获取当天已背单词
+function getTodayDoneWords() {
+    const key = "dictation_done_" + getTodayStr();
+    const val = localStorage.getItem(key);
+    return val ? JSON.parse(val) : [];
+}
+
+// 保存当天已背单词
+function saveTodayDoneWords(doneWords) {
+    const key = "dictation_done_" + getTodayStr();
+    localStorage.setItem(key, JSON.stringify(doneWords));
+}
+
+document.getElementById('fileInput').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        words = evt.target.result.split(/\r?\n/).map(w => w.trim()).filter(w => w.length > 0);
+        if (words.length > 0) {
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
+        } else {
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('summary').textContent = "文件无有效单词。";
+        }
+    };
+    reader.readAsText(file, 'utf-8');
+});
+
+function shuffle(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+}
+
+function speakWord(word) {
+    if (synth.speaking) synth.cancel();
+    const utter = new SpeechSynthesisUtterance(word);
+    utter.lang = 'en-US';
+    synth.speak(utter);
+}
+
+function updateSummary() {
+    // 获取今天已背过的单词
+    const doneWords = getTodayDoneWords();
+    // 错误单词数量
+    const wrongCount = wrongWords.length;
+    // 正确单词数量 = 已背单词数 - 错误单词数
+    const todayTotal = doneWords.length;
+    const todayRight = todayTotal - wrongCount;
+
+    document.getElementById('summary').textContent =
+        `今天已背 ${todayTotal} 个，正确 ${todayRight} 个，错误 ${wrongCount} 个。`;
+    // 更新错误单词列表
+    let html = '';
+    if (wrongWords.length > 0) {
+        html = '<b>拼写错误列表：</b><ul>';
+        for (const item of wrongWords) {
+            html += `<li>你的输入：<b>${item.input}</b>，正确拼写：<b>${item.word}</b></li>`;
+        }
+        html += '</ul>';
+    }
+    document.getElementById('wrongList').innerHTML = html;
+}
+
+function startDictation() {
+    // 过滤掉当天已背过的单词
+    const doneWords = getTodayDoneWords();
+    shuffledWords = words.filter(w => !doneWords.includes(w));
+    shuffle(shuffledWords);
+    current = 0;
+    total = 0;
+    correct = 0;
+    wrongWords = [];
+    isStarted = true;
+    document.getElementById('dictationArea').style.display = '';
+    document.getElementById('startBtn').style.display = 'none';
+    document.getElementById('result').textContent = '';
+    document.getElementById('wordInput').value = '';
+    document.getElementById('wordInput').focus();
+    updateSummary();
+    if (shuffledWords.length === 0) {
+        document.getElementById('result').innerHTML = '<span class="correct">今天的单词都已背过！</span>';
+        setTimeout(endDictation, 2000);
+    } else {
+        nextWord();
+    }
+}
+
+function nextWord() {
+    if (current < shuffledWords.length) {
+        document.getElementById('wordInput').value = '';
+        document.getElementById('wordInput').focus();
+        speakWord(shuffledWords[current]);
+    } else {
+        endDictation();
+    }
+}
+
+function submitAnswer() {
+    if (!isStarted) return;
+    const input = document.getElementById('wordInput').value.trim().toLowerCase();
+    const answer = shuffledWords[current].toLowerCase();
+    total++;
+    // 记录已背单词
+    let doneWords = getTodayDoneWords();
+    if (!doneWords.includes(shuffledWords[current])) {
+        doneWords.push(shuffledWords[current]);
+        saveTodayDoneWords(doneWords);
+    }
+    if (input === answer) {
+        document.getElementById('result').innerHTML = '<span class="correct">正确！</span>';
+        correct++;
+    } else {
+        document.getElementById('result').innerHTML =
+            `<span class="wrong">错误</span>，你的输入：<b>${input}</b>，正确拼写是：<b>${shuffledWords[current]}</b>`;
+        wrongWords.push({input: input, word: shuffledWords[current]});
+    }
+    updateSummary();
+    current++;
+    setTimeout(() => {
+        if (current < shuffledWords.length) {
+            nextWord();
+        } else {
+            endDictation();
+        }
+    }, 600);
+}
+
+document.getElementById('wordInput').addEventListener('input', function(e) {
+    if (document.getElementById('result').textContent !== '') {
+        document.getElementById('result').textContent = '';
+    }
+});
+
+// 重听按钮功能
+document.getElementById('repeatBtn').onclick = function() {
+    if (isStarted && current < shuffledWords.length) {
+        speakWord(shuffledWords[current]);
+    }
+};
+
+function endDictation() {
+    isStarted = false;
+    document.getElementById('dictationArea').style.display = 'none';
+    document.getElementById('startBtn').style.display = '';
+    updateSummary();
+}
+
+document.getElementById('startBtn').onclick = startDictation;
+document.getElementById('wordInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') submitAnswer();
+});
+    </script>
+</body>
+</html>
