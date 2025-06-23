@@ -196,7 +196,7 @@ function endDictation() {
     document.getElementById('startBtn').style.display = '';
     updateSummary();
 }
-
+ 
 document.getElementById('startBtn').onclick = startDictation;
 document.getElementById('wordInput').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') submitAnswer();
