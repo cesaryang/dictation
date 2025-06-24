@@ -26,6 +26,9 @@
         <div id="result"></div>
     </div>
     <div id="summary"></div>
+    <div>
+        <button id="resetBtn" type="button" style="margin-top:10px;">重置当天听写记录</button>
+    </div>
     <!-- 在 summary 下方增加一个错误单词列表的显示区域 -->
     <div id="wrongList" style="margin-top:20px; color:#b22222;"></div>
 
@@ -56,6 +59,17 @@ function getTodayDoneWords() {
 function saveTodayDoneWords(doneWords) {
     const key = "dictation_done_" + getTodayStr();
     localStorage.setItem(key, JSON.stringify(doneWords));
+}
+
+function saveTodayWrongWords(wrongWords) {
+    const key = "dictation_wrong_" + getTodayStr();
+    localStorage.setItem(key, JSON.stringify(wrongWords));
+}
+
+function getTodayWrongWords() {
+    const key = "dictation_wrong_" + getTodayStr();
+    const val = localStorage.getItem(key);
+    return val ? JSON.parse(val) : [];
 }
 
 document.getElementById('fileInput').addEventListener('change', function(e) {
@@ -125,7 +139,8 @@ function startDictation() {
     current = 0;
     total = 0;
     correct = 0;
-    wrongWords = [];
+    // 不要清空 wrongWords
+    // wrongWords = [];
     isStarted = true;
     document.getElementById('dictationArea').style.display = '';
     document.getElementById('startBtn').style.display = 'none';
@@ -160,7 +175,6 @@ function submitAnswer() {
     if (input === answer) {
         document.getElementById('result').innerHTML = '<span class="correct">正确！</span>';
         correct++;
-        // 只在拼写正确时加入已背列表
         if (!doneWords.includes(shuffledWords[current])) {
             doneWords.push(shuffledWords[current]);
             saveTodayDoneWords(doneWords);
@@ -169,7 +183,7 @@ function submitAnswer() {
         document.getElementById('result').innerHTML =
             `<span class="wrong">错误</span>，你的输入：<b>${input}</b>，正确拼写是：<b>${shuffledWords[current]}</b>`;
         wrongWords.push({input: input, word: shuffledWords[current]});
-        // 错误时不加入已背列表
+        saveTodayWrongWords(wrongWords); // 新增：保存错误单词
     }
     updateSummary();
     current++;
@@ -206,6 +220,19 @@ document.getElementById('startBtn').onclick = startDictation;
 document.getElementById('wordInput').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') submitAnswer();
 });
+document.getElementById('resetBtn').onclick = function() {
+    // 清除当天已背单词和错误单词
+    const key1 = "dictation_done_" + getTodayStr();
+    const key2 = "dictation_wrong_" + getTodayStr();
+    localStorage.removeItem(key1);
+    localStorage.removeItem(key2);
+    wrongWords = [];
+    updateSummary();
+    alert("当天听写记录已重置！");
+};
+
+// 页面加载时恢复当天错误单词
+wrongWords = getTodayWrongWords();
     </script>
 </body>
 </html>
