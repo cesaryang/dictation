@@ -11,6 +11,13 @@
         .wrong { color: red; }
         #summary { margin-top: 20px; font-size: 1.1em; }
         #startBtn { font-size: 1em; padding: 6px 16px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 8px 12px; text-align: left; border: 1px solid #ddd; }
+        th { background-color: #f2f2f2; }
+        /* 新增：错误单词表格宽度自适应 */
+        #wrongWordsTable {
+            width: auto;
+        }
     </style>
 </head>
 <body>
@@ -33,19 +40,46 @@
     <div id="wrongList" style="margin-top:20px; color:#b22222;"></div>
 
     <script>
-let words = [];
-let shuffledWords = [];
+let words = []; // 存储从文件加载的原始单词列表
+let shuffledWords = []; // 存储当前轮次需要听写的单词
 let current = 0;
 let total = 0;
 let correct = 0;
 let isStarted = false;
-let wrongWords = [];
+let wrongWords = []; // 存储当天听写错误的单词
 const synth = window.speechSynthesis;
 
-// 获取当天日期字符串
+// 新增：存储每个单词的连续正确次数
+let correctStreaks = {};
+
+// 新增：保存连续正确次数到 localStorage
+function saveStreaks() {
+    localStorage.setItem('dictation_streaks', JSON.stringify(correctStreaks));
+}
+
+// 新增：保存当前剩余单词列表到 localStorage
+function saveWords() {
+    localStorage.setItem('dictation_words', JSON.stringify(words));
+}
+
+
+// 获取当天日期字符串 (凌晨4点为分界线)
 function getTodayStr() {
     const now = new Date();
-    return now.getFullYear() + '-' + (now.getMonth()+1) + '-' + now.getDate();
+    const hour = now.getHours();
+    const date = new Date(now); // 创建一个副本，避免修改原始 now 对象
+
+    // 如果当前时间在凌晨0点到4点之间，则视为前一天
+    if (hour < 4) {
+        date.setDate(date.getDate() - 1);
+    }
+
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1; // 月份从0开始，需要加1
+    const day = date.getDate();
+
+    // 格式化为 YYYY-MM-DD
+    return `${year}-${month}-${day}`;
 }
 
 // 获取当天已背单词
@@ -77,7 +111,13 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = function(evt) {
+        // 当加载新文件时，清空之前的 streak 和保存的 words
+        correctStreaks = {};
+        saveStreaks();
+        localStorage.removeItem('dictation_words'); // 清除之前保存的单词列表
+
         words = evt.target.result.split(/\r?\n/).map(w => w.trim()).filter(w => w.length > 0);
+        saveWords(); // 保存新加载的单词列表
         if (words.length > 0) {
             document.getElementById('startBtn').disabled = false;
             document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
@@ -104,7 +144,7 @@ function speakWord(word) {
     const utter = new SpeechSynthesisUtterance(word);
     utter.lang = 'en-US';
     if (voice) utter.voice = voice;
-    utter.rate = 0.9
+    utter.rate = 1.0
     synth.speak(utter);
 }
 
@@ -122,11 +162,31 @@ function updateSummary() {
     // 更新错误单词列表
     let html = '';
     if (wrongWords.length > 0) {
-        html = '<b>拼写错误列表：</b><ul>';
+        html = '<b>拼写错误列表：</b>';
+        // 使用 flexbox 容器让两个表格并排显示，移除 gap
+        html += '<div style="display: flex; margin-top: 10px;">'; // 移除 gap: 20px;
+
+        // 第一个表格：只显示你的输入 (拼写错误的单词)
+        html += '<div>';
+        html += '<table border="1" style="border-collapse: collapse;">';
+        html += '<tr><th>你的输入</th></tr>'; // 表头
         for (const item of wrongWords) {
-            html += `<li>你的输入：<b>${item.input}</b>，正确拼写：<b>${item.word}</b></li>`;
+            html += `<tr><td>${item.input}</td></tr>`; // 只显示你的输入
         }
-        html += '</ul>';
+        html += '</table>';
+        html += '</div>';
+
+        // 第二个表格：只显示正确拼写
+        html += '<div>';
+        html += '<table border="1" style="border-collapse: collapse;">';
+        html += '<tr><th>正确拼写</th></tr>'; // 表头
+        for (const item of wrongWords) {
+            html += `<tr><td>${item.word}</td></tr>`; // 只显示正确拼写
+        }
+        html += '</table>';
+        html += '</div>';
+
+        html += '</div>'; // 关闭 flex 容器
     }
     document.getElementById('wrongList').innerHTML = html;
 }
@@ -134,6 +194,7 @@ function updateSummary() {
 function startDictation() {
     // 过滤掉当天已背过的单词
     const doneWords = getTodayDoneWords();
+    // 使用当前words列表进行过滤
     shuffledWords = words.filter(w => !doneWords.includes(w));
     shuffle(shuffledWords);
     current = 0;
@@ -158,9 +219,11 @@ function startDictation() {
 
 function nextWord() {
     if (current < shuffledWords.length) {
+        // 先播放发音
+        speakWord(shuffledWords[current]);
+        // 再清除输入框内容
         document.getElementById('wordInput').value = '';
         document.getElementById('wordInput').focus();
-        speakWord(shuffledWords[current]);
     } else {
         endDictation();
     }
@@ -172,18 +235,48 @@ function submitAnswer() {
     const answer = shuffledWords[current].toLowerCase();
     total++;
     let doneWords = getTodayDoneWords();
+    const word = shuffledWords[current]; // 获取当前单词的原始拼写
+
     if (input === answer) {
         document.getElementById('result').innerHTML = '<span class="correct">正确！</span>';
         correct++;
-        if (!doneWords.includes(shuffledWords[current])) {
-            doneWords.push(shuffledWords[current]);
+        // 连续正确计数逻辑
+        correctStreaks[word] = (correctStreaks[word] || 0) + 1;
+        saveStreaks(); // 保存 streak 变化
+
+        if (correctStreaks[word] >= 6) {
+            // 连续正确达到6次，从 words 列表中移除该单词
+            words = words.filter(w => w !== word);
+            saveWords(); // 保存更新后的 words 列表
+
+            // 从 streak 记录中移除该单词，保持记录干净
+            delete correctStreaks[word];
+            saveStreaks(); // 保存更新后的 streak 记录
+
+            document.getElementById('result').innerHTML += `<span style="color:blue;">（已连续6次正确，已移除）</span>`;
+
+            // 如果当前单词被移除，需要重新生成 shuffledWords 列表，并调整 current
+            // 简单的处理是结束当前轮次，让用户重新开始
+             setTimeout(() => {
+                endDictation();
+                alert(`单词 "${word}" 已连续正确6次，已从列表中移除。请重新开始听写。`);
+             }, 600);
+             return; // 结束当前 submitAnswer 逻辑
+        }
+
+        if (!doneWords.includes(word)) {
+            doneWords.push(word);
             saveTodayDoneWords(doneWords);
         }
     } else {
         document.getElementById('result').innerHTML =
-            `<span class="wrong">错误</span>，你的输入：<b>${input}</b>，正确拼写是：<b>${shuffledWords[current]}</b>`;
-        wrongWords.push({input: input, word: shuffledWords[current]});
-        saveTodayWrongWords(wrongWords); // 新增：保存错误单词
+            `<span class="wrong">错误</span>，你的输入：<b>${input}</b>，正确拼写是：<b>${word}</b>`;
+        wrongWords.push({input: input, word: word});
+        saveTodayWrongWords(wrongWords); // 保存错误单词
+
+        // 连续正确计数逻辑：答错清零
+        correctStreaks[word] = 0;
+        saveStreaks(); // 保存 streak 变化
     }
     updateSummary();
     current++;
@@ -215,11 +308,12 @@ function endDictation() {
     document.getElementById('startBtn').style.display = '';
     updateSummary();
 }
- 
+
 document.getElementById('startBtn').onclick = startDictation;
 document.getElementById('wordInput').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') submitAnswer();
 });
+
 document.getElementById('resetBtn').onclick = function() {
     // 清除当天已背单词和错误单词
     const key1 = "dictation_done_" + getTodayStr();
@@ -229,10 +323,37 @@ document.getElementById('resetBtn').onclick = function() {
     wrongWords = [];
     updateSummary();
     alert("当天听写记录已重置！");
+    // 注意：重置按钮不清除 words 和 streaks，因为它们是针对整个单词列表的，不是针对当天的。
+    // 如果需要重置 words 和 streaks，需要另外的按钮或逻辑。
 };
 
-// 页面加载时恢复当天错误单词
-wrongWords = getTodayWrongWords();
+// 页面加载时恢复数据
+window.addEventListener('load', function() {
+    // 恢复错误单词
+    wrongWords = getTodayWrongWords();
+    updateSummary(); // 首次加载时更新统计和错误列表
+
+    // 恢复 words 列表和 streaks
+    const savedWords = localStorage.getItem('dictation_words');
+    if (savedWords) {
+        words = JSON.parse(savedWords);
+        // 如果 words 恢复了，启用开始按钮
+        if (words.length > 0) {
+             document.getElementById('startBtn').disabled = false;
+             document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
+        } else {
+             document.getElementById('startBtn').disabled = true;
+             document.getElementById('summary').textContent = "文件无有效单词。";
+        }
+    }
+    // 如果没有保存的 words，文件输入框会处理加载
+
+    const savedStreaks = localStorage.getItem('dictation_streaks');
+    if (savedStreaks) {
+        correctStreaks = JSON.parse(savedStreaks);
+    }
+});
+
     </script>
 </body>
 </html>
