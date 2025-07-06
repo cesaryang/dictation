@@ -11,12 +11,14 @@
         .wrong { color: red; }
         #summary { margin-top: 20px; font-size: 1.1em; }
         #startBtn { font-size: 1em; padding: 6px 16px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        table { border-collapse: collapse; } /* 移除 width: 100%; */
         th, td { padding: 8px 12px; text-align: left; border: 1px solid #ddd; }
         th { background-color: #f2f2f2; }
-        /* 新增：错误单词表格宽度自适应 */
-        #wrongWordsTable {
-            width: auto;
+        /* 减小错误单词列表的字号 */
+        #wrongList {
+            margin-top: 20px;
+            color: #b22222;
+            font-size: 0.9em; /* 或者使用 'small' */
         }
     </style>
 </head>
@@ -137,16 +139,45 @@ function shuffle(array) {
 }
 
 function speakWord(word) {
-    if (synth.speaking) synth.cancel();
+    if (synth.speaking) {
+        synth.cancel();
+    }
+
     const voices = synth.getVoices();
-    // 尝试选择 Google US English（如有）
-    const voice = voices.find(v => v.name.includes('Google US English')) || voices[0];
+    if (voices.length === 0) {
+        // Voices are loaded asynchronously. Wait for them and retry.
+        synth.onvoiceschanged = () => speakWord(word);
+        return;
+    }
+
+    const voice = voices.find(v => v.name.includes('Google US English')) || voices.find(v => v.lang.startsWith('en-US')) || voices[0];
+    
     const utter = new SpeechSynthesisUtterance(word);
     utter.lang = 'en-US';
-    if (voice) utter.voice = voice;
-    utter.rate = 1.0
+    if (voice) {
+        utter.voice = voice;
+    }
+    utter.rate = 1.0;
+    utter.onerror = (event) => console.error("Speech synthesis error:", event.error);
+
     synth.speak(utter);
 }
+
+// 新增：预加载单词发音
+function preloadAudio(wordList) {
+    const voices = synth.getVoices();
+    const voice = voices.find(v => v.name.includes('Google US English')) || voices[0]; // 使用相同的语音
+    wordList.forEach(word => {
+        const utter = new SpeechSynthesisUtterance(word);
+        utter.lang = 'en-US';
+        if (voice) utter.voice = voice;
+        utter.volume = 0; // 设置音量为0，进行预加载
+        // 浏览器会自动将这些utterance加入队列并处理
+        synth.speak(utter);
+    });
+    console.log(`尝试预加载 ${wordList.length} 个单词的发音...`); // 可选：在控制台输出提示
+}
+
 
 function updateSummary() {
     // 获取今天已背过的单词
@@ -171,7 +202,9 @@ function updateSummary() {
         html += '<table border="1" style="border-collapse: collapse;">';
         html += '<tr><th>你的输入</th></tr>'; // 表头
         for (const item of wrongWords) {
-            html += `<tr><td>${item.input}</td></tr>`; // 只显示你的输入
+            // 如果输入为空，插入 &nbsp; 保持单元格高度
+            const userInput = item.input === '' ? '&nbsp;' : item.input;
+            html += `<tr><td>${userInput}</td></tr>`; // 只显示你的输入
         }
         html += '</table>';
         html += '</div>';
@@ -244,8 +277,8 @@ function submitAnswer() {
         correctStreaks[word] = (correctStreaks[word] || 0) + 1;
         saveStreaks(); // 保存 streak 变化
 
-        if (correctStreaks[word] >= 6) {
-            // 连续正确达到6次，从 words 列表中移除该单词
+        if (correctStreaks[word] >= 4) {
+            // 连续正确达到4次，从 words 列表中移除该单词
             words = words.filter(w => w !== word);
             saveWords(); // 保存更新后的 words 列表
 
@@ -253,13 +286,13 @@ function submitAnswer() {
             delete correctStreaks[word];
             saveStreaks(); // 保存更新后的 streak 记录
 
-            document.getElementById('result').innerHTML += `<span style="color:blue;">（已连续6次正确，已移除）</span>`;
+            document.getElementById('result').innerHTML += `<span style="color:blue;">（已连续4次正确，已移除）</span>`;
 
             // 如果当前单词被移除，需要重新生成 shuffledWords 列表，并调整 current
             // 简单的处理是结束当前轮次，让用户重新开始
              setTimeout(() => {
                 endDictation();
-                alert(`单词 "${word}" 已连续正确6次，已从列表中移除。请重新开始听写。`);
+                alert(`单词 "${word}" 已连续正确4次，已从列表中移除。请重新开始听写。`);
              }, 600);
              return; // 结束当前 submitAnswer 逻辑
         }
