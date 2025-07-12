@@ -111,13 +111,19 @@ function saveTodayDoneWords(doneWords) {
     localStorage.setItem(key, JSON.stringify(doneWords));
 }
 
-// 通用函数：保存当天数据 (已背单词或错误单词)
-function saveTodayData(type, data) {
-    const key = `dictation_${type}_` + getTodayStr(); // 使用模板字符串
-    localStorage.setItem(key, JSON.stringify(data));
+function saveTodayWrongWords(wrongWords) {
+    const key = "dictation_wrong_" + getTodayStr();
+    localStorage.setItem(key, JSON.stringify(wrongWords));
+}
+
+function getTodayWrongWords() {
+    const key = "dictation_wrong_" + getTodayStr();
+    const val = localStorage.getItem(key);
+    return val ? JSON.parse(val) : [];
 }
 
 document.getElementById('fileInput').addEventListener('change', function(e) {
+    const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = function(evt) {
@@ -385,14 +391,8 @@ document.getElementById('resetBtn').onclick = function() {
     localStorage.removeItem(key3); // 新增：移除总尝试次数
 
     wrongWords = []; // 重置错误单词列表变量
-    todayAttempts = 0;
+    todayAttempts = 0; // 重置总尝试次数变量
 
-    // 重置当天已背单词和错误单词列表
-    saveTodayData("done", []);
-    saveTodayData("wrong", []);
-
-    // 重置总尝试次数
-    saveTodayAttempts(0);
     updateSummary(); // 更新显示
     alert("当天听写记录已重置！");
     // 注意：重置按钮不清除 words 和 streaks，因为它们是针对整个单词列表的，不是针对当天的。
