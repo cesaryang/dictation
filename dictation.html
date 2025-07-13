@@ -55,6 +55,8 @@ let correctStreaks = {};
 
 // 新增：存储当天总尝试次数
 let todayAttempts = 0;
+// 新增：存储当天尝试过的唯一单词
+let todayAttemptedWords = new Set();
 
 // 新增：保存连续正确次数到 localStorage
 function saveStreaks() {
@@ -122,10 +124,23 @@ function getTodayWrongWords() {
     return val ? JSON.parse(val) : [];
 }
 
+// 添加新的存取函数
+function saveTodayAttemptedWords() {
+    const key = "dictation_attempted_" + getTodayStr();
+    localStorage.setItem(key, JSON.stringify(Array.from(todayAttemptedWords)));
+}
+
+function getTodayAttemptedWords() {
+    const key = "dictation_attempted_" + getTodayStr();
+    const val = localStorage.getItem(key);
+    return new Set(val ? JSON.parse(val) : []);
+}
+
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
+
     reader.onload = function(evt) {
         // 当加载新文件时，清空之前的 streak 和保存的 words
         // correctStreaks = {}; // 移除或注释掉这行
@@ -136,6 +151,7 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
         saveWords(); // 保存新加载的单词列表
         if (words.length > 0) {
             document.getElementById('startBtn').disabled = false;
+            // 文件加载成功，始终显示加载的单词数量
             document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
             // 新增：文件加载完成后预加载音频
             preloadAudio(words);
@@ -144,6 +160,17 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
             document.getElementById('summary').textContent = "文件无有效单词。";
         }
     };
+
+    // 新增：文件读取错误处理
+    reader.onerror = function(evt) {
+        console.error("文件读取失败:", evt.target.error);
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('summary').textContent = "加载文件失败，请重试。";
+        // 清空 words 列表，避免使用错误的数据
+        words = [];
+        localStorage.removeItem('dictation_words');
+    };
+
     reader.readAsText(file, 'utf-8');
 });
 
@@ -196,21 +223,12 @@ function preloadAudio(wordList) {
 
 
 function updateSummary() {
-    // 获取今天已背过的单词 (这个现在表示至少正确过一次的单词数)
-    // const doneWords = getTodayDoneWords(); // 暂时不需要这个来计算总数和正确数
-
-    // 错误单词数量 (即错误尝试次数)
     const wrongCount = wrongWords.length;
-
-    // 总尝试次数就是 todayAttempts
-    const totalAttempts = todayAttempts;
-
-    // 正确尝试次数 = 总尝试次数 - 错误尝试次数
-    // 使用 Math.max 确保正确次数不小于 0
-    const correctAttempts = Math.max(0, totalAttempts - wrongCount);
+    const uniqueWordsCount = todayAttemptedWords.size;
+    const correctCount = Math.max(0, todayAttempts - wrongCount);
 
     document.getElementById('summary').textContent =
-        `今天已背 ${totalAttempts} 个，正确 ${correctAttempts} 个，错误 ${wrongCount} 个。`;
+        `今天已背 ${uniqueWordsCount} 个单词，正确 ${correctCount} 次，错误 ${wrongCount} 次。`;
     // 更新错误单词列表
     let html = '';
     if (wrongWords.length > 0) {
@@ -266,6 +284,7 @@ function startDictation() {
     // 在开始听写时加载当天的尝试次数和错误列表
     wrongWords = getTodayWrongWords();
     todayAttempts = getTodayAttempts();
+    todayAttemptedWords = getTodayAttemptedWords();
 
     updateSummary(); // 更新显示
 
@@ -293,14 +312,17 @@ function submitAnswer() {
     if (!isStarted) return;
     const input = document.getElementById('wordInput').value.trim().toLowerCase();
     const answer = shuffledWords[current].toLowerCase();
-    // total++; // 这个变量似乎没有在 summary 中使用
+    const word = shuffledWords[current];
+
+    // 记录尝试过的唯一单词
+    todayAttemptedWords.add(word);
+    saveTodayAttemptedWords();
 
     // 每次提交答案，总尝试次数加一
     todayAttempts++;
-    saveTodayAttempts(todayAttempts); // 保存总尝试次数
+    saveTodayAttempts(todayAttempts);
 
     let doneWords = getTodayDoneWords();
-    const word = shuffledWords[current]; // 获取当前单词的原始拼写
 
     if (input === answer) {
         document.getElementById('result').innerHTML = '<span class="correct">正确！</span>';
@@ -320,9 +342,9 @@ function submitAnswer() {
 
             document.getElementById('result').innerHTML += `<span style="color:blue;">（已连续4次正确，已移除）</span>`;
 
-            // 如果当前单词被移除，需要重新生成 shuffledWords 列表，并调整 current
-            // 简单的处理是结束当前轮次，让用户重新开始
-             setTimeout(() => {
+            //查看结果: console.log(correctStreaks)
+
+            setTimeout(() => {
                 endDictation();
                 alert(`单词 "${word}" 已连续正确4次，已从列表中移除。请重新开始听写。`);
              }, 600);
@@ -384,16 +406,19 @@ document.getElementById('resetBtn').onclick = function() {
     // 清除当天已背单词、错误单词和总尝试次数
     const key1 = "dictation_done_" + getTodayStr();
     const key2 = "dictation_wrong_" + getTodayStr();
-    const key3 = "dictation_attempts_" + getTodayStr(); // 新增：总尝试次数的 key
+    const key3 = "dictation_attempts_" + getTodayStr();
+    const key4 = "dictation_attempted_" + getTodayStr();
 
     localStorage.removeItem(key1);
     localStorage.removeItem(key2);
-    localStorage.removeItem(key3); // 新增：移除总尝试次数
+    localStorage.removeItem(key3);
+    localStorage.removeItem(key4);
 
-    wrongWords = []; // 重置错误单词列表变量
-    todayAttempts = 0; // 重置总尝试次数变量
+    wrongWords = [];
+    todayAttempts = 0;
+    todayAttemptedWords.clear();
 
-    updateSummary(); // 更新显示
+    updateSummary();
     alert("当天听写记录已重置！");
     // 注意：重置按钮不清除 words 和 streaks，因为它们是针对整个单词列表的，不是针对当天的。
     // 如果需要重置 words 和 streaks，需要另外的按钮或逻辑。
@@ -403,7 +428,8 @@ document.getElementById('resetBtn').onclick = function() {
 window.addEventListener('load', function() {
     // 恢复错误单词和总尝试次数
     wrongWords = getTodayWrongWords();
-    todayAttempts = getTodayAttempts(); // 新增：恢复总尝试次数
+    todayAttempts = getTodayAttempts();
+    todayAttemptedWords = getTodayAttemptedWords();
 
     updateSummary(); // 首次加载时更新统计和错误列表
 
