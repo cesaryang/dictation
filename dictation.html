@@ -331,8 +331,8 @@ function submitAnswer() {
         correctStreaks[word] = (correctStreaks[word] || 0) + 1;
         saveStreaks(); // 保存 streak 变化
 
-        if (correctStreaks[word] >= 4) {
-            // 连续正确达到4次，从 words 列表中移除该单词
+        if (correctStreaks[word] >= 5) { // 修改为5次
+            // 连续正确达到5次，从 words 列表中移除该单词
             words = words.filter(w => w !== word);
             saveWords(); // 保存更新后的 words 列表
 
@@ -340,15 +340,17 @@ function submitAnswer() {
             delete correctStreaks[word];
             saveStreaks(); // 保存更新后的 streak 记录
 
-            document.getElementById('result').innerHTML += `<span style="color:blue;">（已连续4次正确，已移除）</span>`;
+            document.getElementById('result').innerHTML += `<span style="color:blue;">（连续5次正确，从列表中移除）</span>`;
 
-            //查看结果: console.log(correctStreaks)
-
+            current++;
             setTimeout(() => {
-                endDictation();
-                alert(`单词 "${word}" 已连续正确4次，已从列表中移除。请重新开始听写。`);
-             }, 600);
-             return; // 结束当前 submitAnswer 逻辑
+                if (current < shuffledWords.length) {
+                    nextWord();
+                } else {
+                    endDictation();
+                }
+            }, 600);
+            return;
         }
 
         // 如果这个单词是第一次正确，才加入 doneWords
