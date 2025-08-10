@@ -331,8 +331,8 @@ function submitAnswer() {
         correctStreaks[word] = (correctStreaks[word] || 0) + 1;
         saveStreaks(); // 保存 streak 变化
 
-        if (correctStreaks[word] >= 5) { // 修改为5次
-            // 连续正确达到5次，从 words 列表中移除该单词
+        if (correctStreaks[word] >= 7) { // 修改为7次
+            // 连续正确达到7次，从 words 列表中移除该单词
             words = words.filter(w => w !== word);
             saveWords(); // 保存更新后的 words 列表
 
@@ -340,7 +340,7 @@ function submitAnswer() {
             delete correctStreaks[word];
             saveStreaks(); // 保存更新后的 streak 记录
 
-            document.getElementById('result').innerHTML += `<span style="color:blue;">（连续5次正确，从列表中移除）</span>`;
+            document.getElementById('result').innerHTML += `<span style="color:blue;">（连续7次正确，从列表中移除）</span>`;
 
             current++;
             setTimeout(() => {
