@@ -147,12 +147,13 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
         // saveStreaks(); // 移除或注释掉这行
         localStorage.removeItem('dictation_words'); // 清除之前保存的单词列表
 
-        words = evt.target.result.split(/\r?\n/).map(w => w.trim()).filter(w => w.length > 0);
+        const newWords = evt.target.result.split(/\r?\n/).map(w => w.trim()).filter(w => w.length > 0);
+        words = newWords; // 使用新加载的单词列表
         saveWords(); // 保存新加载的单词列表
         if (words.length > 0) {
             document.getElementById('startBtn').disabled = false;
-            // 文件加载成功，始终显示加载的单词数量
-            document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
+            // 文件加载成功，显示实际从文件加载的单词数量
+            document.getElementById('summary').textContent = `已加载单词 ${newWords.length} 个。`;
             // 新增：文件加载完成后预加载音频
             preloadAudio(words);
         } else {
@@ -442,14 +443,15 @@ window.addEventListener('load', function() {
         // 如果 words 恢复了，启用开始按钮
         if (words.length > 0) {
              document.getElementById('startBtn').disabled = false;
-             // 页面加载时，如果文件已加载，summary 显示加载的单词数
-             // 如果当天有听写记录，updateSummary 会覆盖这个显示
-             // 为了避免冲突，可以在这里只显示加载单词数，让 updateSummary 处理听写统计
-             document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
+             // 页面加载时不显示单词数量，让updateSummary处理统计显示
+             // 避免显示过时的localStorage中的单词数量
         } else {
              document.getElementById('startBtn').disabled = true;
-             document.getElementById('summary').textContent = "文件无有效单词。";
+             document.getElementById('summary').textContent = "请选择单词文件。";
         }
+    } else {
+        // 没有保存的单词数据，提示用户选择文件
+        document.getElementById('summary').textContent = "请选择单词文件。";
     }
     // 如果没有保存的 words，文件输入框会处理加载
 
@@ -458,10 +460,13 @@ window.addEventListener('load', function() {
         correctStreaks = JSON.parse(savedStreaks);
     }
 
-    // 如果页面加载时已经有当天的听写记录 (通过恢复 wrongWords 或 todayAttempts 判断)
-    // 确保 summary 显示的是当天的统计，而不是文件加载信息
+    // 如果页面加载时已经有当天的听写记录，显示统计信息
+    // 否则如果有加载的单词文件，显示文件信息
     if (wrongWords.length > 0 || todayAttempts > 0) {
          updateSummary();
+    } else if (words.length > 0) {
+         // 只有在没有听写记录时才显示文件加载信息
+         document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
     }
 });
     </script>
