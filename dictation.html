@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>单词听写 Web 版</title>
+    <title>Dictation Online</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; }
         #wordInput { font-size: 1.2em; }
@@ -23,10 +23,59 @@
     </style>
 </head>
 <body>
-    <h2>单词听写 Web 版</h2>
+    <h2>Dictation Online</h2>
+    
+    
+    <!-- 成功提示区域 -->
+    <div id="successMessage" style="display: none; margin-bottom: 10px; padding: 10px; border-radius: 5px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb;">
+    </div>
+    
+    <!-- 错误警告区域 -->
+    <div id="errorMessage" style="display: none; margin-bottom: 10px; padding: 10px; border-radius: 5px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb;">
+    </div>
+
     <div>
-        <input type="file" id="fileInput" accept=".txt">
         <button id="startBtn" disabled>开始背词</button>
+    </div>
+    
+    <!-- GitHub配置面板 -->
+    <div id="configPanel" style="margin-top: 15px; padding: 15px; border: 2px solid #007bff; border-radius: 8px; background-color: #f8f9ff; display: none;">
+        <h3 style="margin-top: 0; color: #007bff;">GitHub配置</h3>
+        <div style="margin-bottom: 10px;">
+            <label for="tokenInput" style="display: block; margin-bottom: 5px; font-weight: bold;">GitHub Token:</label>
+            <input type="text" id="tokenInput" placeholder="输入您的GitHub Personal Access Token" style="width: 400px; padding: 8px; font-size: 0.9em; border: 1px solid #ccc; border-radius: 4px;">
+        </div>
+        <div style="margin-bottom: 15px;">
+            <label for="gistIdInput" style="display: block; margin-bottom: 5px; font-weight: bold;">Gist ID:</label>
+            <input type="text" id="gistIdInput" placeholder="输入您的Gist ID" style="width: 400px; padding: 8px; font-size: 0.9em; border: 1px solid #ccc; border-radius: 4px;">
+        </div>
+        <div style="margin-bottom: 10px;">
+            <button id="saveConfigBtn" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">保存配置</button>
+            <button id="testConfigBtn" style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px;">测试连接</button>
+        </div>
+        <div style="font-size: 0.85em; color: #666;">
+            <p style="margin: 5px 0;">• Token将以混淆方式保存在浏览器本地存储中</p>
+            <p style="margin: 5px 0;">• 如需获取Token，请访问GitHub Settings → Developer settings → Personal access tokens</p>
+        </div>
+    </div>
+    
+    <!-- 添加新词功能 (折叠式) -->
+    <div style="margin-top: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; background-color: #f0f8ff;">
+        <div>
+            <button id="toggleAddWordBtn" style="background: none; border: none; cursor: pointer; font-size: 1.1em; color: #007bff;">
+                <span id="toggleIcon">▶</span> 添加新词
+            </button>
+        </div>
+        <div id="addWordPanel" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+            <div style="margin-bottom: 10px;">
+                <input type="text" id="newWordInput" placeholder="输入要添加的新单词" style="width: 250px; font-size: 1.1em;">
+                <button id="addWordBtn">添加单词</button>
+                <button id="testNewWordBtn" style="margin-left: 10px;">测试发音</button>
+            </div>
+            <div style="font-size: 0.9em; color: #666;">
+                提示：添加后单词会自动保存到当前单词列表中
+            </div>
+        </div>
     </div>
     <div id="dictationArea" style="margin-top:20px; display:none;">
         <span>请输入你听到的单词：</span>
@@ -35,9 +84,6 @@
         <div id="result"></div>
     </div>
     <div id="summary"></div>
-    <div>
-        <button id="resetBtn" type="button" style="margin-top:10px;">重置当天听写记录</button>
-    </div>
     <!-- 在 summary 下方增加一个错误单词列表的显示区域 -->
     <div id="wrongList" style="margin-top:20px; color:#b22222;"></div>
 
@@ -57,6 +103,328 @@ let correctStreaks = {};
 let todayAttempts = 0;
 // 新增：存储当天尝试过的唯一单词
 let todayAttemptedWords = new Set();
+
+// GitHub Gist 配置和功能
+let githubConfig = {
+    token: '',
+    gistId: ''
+};
+
+// 简单混淆函数（Base64+字符替换）
+function obfuscate(str) {
+    return btoa(str).split('').map(c => String.fromCharCode(c.charCodeAt(0) + 1)).join('');
+}
+
+function deobfuscate(str) {
+    return atob(str.split('').map(c => String.fromCharCode(c.charCodeAt(0) - 1)).join(''));
+}
+
+// 保存配置到localStorage（混淆保护）
+function saveGitHubConfig(token, gistId) {
+    try {
+        const config = {
+            token: obfuscate(token),
+            gistId: gistId, // gistId不需要混淆，是公开信息
+            timestamp: Date.now()
+        };
+        localStorage.setItem('dictation_github_config', JSON.stringify(config));
+        console.log('GitHub配置已保存');
+        return true;
+    } catch (error) {
+        console.error('保存GitHub配置失败:', error);
+        return false;
+    }
+}
+
+// 从localStorage加载配置（解混淆）
+function loadGitHubConfig() {
+    try {
+        const configStr = localStorage.getItem('dictation_github_config');
+        if (!configStr) return null;
+        
+        const config = JSON.parse(configStr);
+        return {
+            token: deobfuscate(config.token),
+            gistId: config.gistId,
+            timestamp: config.timestamp
+        };
+    } catch (error) {
+        console.error('读取GitHub配置失败:', error);
+        return null;
+    }
+}
+
+// 检查是否已有有效配置
+function hasValidConfig() {
+    const config = loadGitHubConfig();
+    return config && config.token && config.gistId;
+}
+
+// 已掌握的单词列表（连续7次正确后移入此列表）
+let masteredWords = [];
+
+// 清理超过15天的历史记录
+function cleanOldHistoryData(historyData) {
+    if (!historyData) return {};
+    
+    const today = new Date();
+    const fifteenDaysAgo = new Date(today);
+    fifteenDaysAgo.setDate(today.getDate() - 15);
+    
+    const cleanedData = {};
+    
+    for (const dateStr in historyData) {
+        // 解析日期 (YYYY-MM-DD 或 YYYY-M-D 格式)
+        const dateParts = dateStr.split('-');
+        if (dateParts.length === 3) {
+            const year = parseInt(dateParts[0]);
+            const month = parseInt(dateParts[1]) - 1; // JS月份从0开始
+            const day = parseInt(dateParts[2]);
+            const recordDate = new Date(year, month, day);
+            
+            // 保留15天内的记录
+            if (recordDate >= fifteenDaysAgo) {
+                cleanedData[dateStr] = historyData[dateStr];
+            } else {
+                console.log(`删除过期记录: ${dateStr}`);
+            }
+        }
+    }
+    
+    return cleanedData;
+}
+
+// 清理本地localStorage中的过期历史数据
+function cleanLocalStorageHistory() {
+    const today = new Date();
+    const fifteenDaysAgo = new Date(today);
+    fifteenDaysAgo.setDate(today.getDate() - 15);
+    
+    const keysToDelete = [];
+    
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('dictation_done_') || 
+                   key.startsWith('dictation_wrong_') || 
+                   key.startsWith('dictation_attempts_') ||
+                   key.startsWith('dictation_attempted_'))) {
+            
+            const dateMatch = key.match(/_(\d{4}-\d+-\d+)$/);
+            if (dateMatch) {
+                const dateStr = dateMatch[1];
+                const dateParts = dateStr.split('-');
+                if (dateParts.length === 3) {
+                    const year = parseInt(dateParts[0]);
+                    const month = parseInt(dateParts[1]) - 1;
+                    const day = parseInt(dateParts[2]);
+                    const recordDate = new Date(year, month, day);
+                    
+                    // 标记超过15天的记录为待删除
+                    if (recordDate < fifteenDaysAgo) {
+                        keysToDelete.push(key);
+                    }
+                }
+            }
+        }
+    }
+    
+    // 删除过期的localStorage项
+    keysToDelete.forEach(key => {
+        console.log(`清理本地过期数据: ${key}`);
+        localStorage.removeItem(key);
+    });
+    
+    if (keysToDelete.length > 0) {
+        console.log(`已清理 ${keysToDelete.length} 条本地过期记录`);
+    }
+}
+
+// GitHub Gist API 功能
+async function saveToGist(data) {
+    if (!githubConfig.token) {
+        throw new Error('GitHub token 未配置');
+    }
+
+    // 清理历史数据（保留15天内的记录）
+    const cleanedHistoryData = cleanOldHistoryData(data.historyData || {});
+    
+    const gistData = {
+        description: "单词听写数据",
+        public: false,
+        files: {
+            "words.txt": {
+                content: data.words.join('\n')
+            },
+            "data.json": {
+                content: JSON.stringify({
+                    correctStreaks: data.correctStreaks || {},
+                    masteredWords: data.masteredWords || [],
+                    todayRecords: {
+                        date: getTodayStr(),
+                        doneWords: data.todayDoneWords || [],
+                        wrongWords: data.todayWrongWords || [],
+                        attempts: data.todayAttempts || 0,
+                        attemptedWords: Array.from(data.todayAttemptedWords || [])
+                    },
+                    historyData: cleanedHistoryData
+                }, null, 2)
+            }
+        }
+    };
+
+    let url = githubConfig.gistId 
+        ? `https://api.github.com/gists/${githubConfig.gistId}`
+        : 'https://api.github.com/gists';
+    
+    let method = githubConfig.gistId ? 'PATCH' : 'POST';
+
+    let response = await fetch(url, {
+        method: method,
+        headers: {
+            'Authorization': `token ${githubConfig.token}`,
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(gistData)
+    });
+
+    // 如果是404错误（Gist不存在），则创建新的Gist
+    if (response.status === 404 && githubConfig.gistId) {
+        console.log('原Gist不存在，创建新的Gist...');
+        url = 'https://api.github.com/gists';
+        method = 'POST';
+        
+        response = await fetch(url, {
+            method: method,
+            headers: {
+                'Authorization': `token ${githubConfig.token}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(gistData)
+        });
+    }
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error('GitHub API 错误详情:', {
+            status: response.status,
+            statusText: response.statusText,
+            url: url,
+            method: method,
+            response: errorText
+        });
+        throw new Error(`GitHub API 错误: ${response.status} ${response.statusText}\n详情: ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    // 如果是新创建的Gist，更新ID并记录
+    if (method === 'POST') {
+        const oldGistId = githubConfig.gistId;
+        githubConfig.gistId = result.id;
+        console.log('新创建的 Gist ID:', result.id);
+        
+        if (oldGistId) {
+            console.log(`原Gist不存在，已创建新的 Gist，ID: ${result.id}`);
+        } else {
+            console.log(`已创建新的 Gist，ID: ${result.id}`);
+        }
+    }
+    
+    return result;
+}
+
+async function loadFromGist() {
+    if (!githubConfig.token || !githubConfig.gistId) {
+        throw new Error('GitHub 配置不完整');
+    }
+
+    const response = await fetch(`https://api.github.com/gists/${githubConfig.gistId}`, {
+        headers: {
+            'Authorization': `token ${githubConfig.token}`,
+            'Accept': 'application/vnd.github.v3+json'
+        }
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error('加载Gist失败:', {
+            status: response.status,
+            statusText: response.statusText,
+            gistId: githubConfig.gistId,
+            response: errorText
+        });
+        throw new Error(`GitHub API 错误: ${response.status} ${response.statusText}\n详情: ${errorText}`);
+    }
+
+    const gist = await response.json();
+    
+    const result = {
+        words: [],
+        correctStreaks: {},
+        masteredWords: [],
+        todayDoneWords: [],
+        todayWrongWords: [],
+        todayAttempts: 0,
+        todayAttemptedWords: []
+    };
+
+    // 解析单词列表
+    if (gist.files['words.txt']) {
+        result.words = gist.files['words.txt'].content
+            .split(/\r?\n/)
+            .map(w => w.trim())
+            .filter(w => w.length > 0);
+    }
+
+    // 解析数据
+    if (gist.files['data.json']) {
+        try {
+            const data = JSON.parse(gist.files['data.json'].content);
+            result.correctStreaks = data.correctStreaks || {};
+            result.masteredWords = data.masteredWords || [];
+            
+            // 检查是否是今天的记录
+            if (data.todayRecords && data.todayRecords.date === getTodayStr()) {
+                result.todayDoneWords = data.todayRecords.doneWords || [];
+                result.todayWrongWords = data.todayRecords.wrongWords || [];
+                result.todayAttempts = data.todayRecords.attempts || 0;
+                result.todayAttemptedWords = data.todayRecords.attemptedWords || [];
+            }
+            
+            // 处理历史数据，清理过期记录
+            if (data.historyData) {
+                const cleanedHistoryData = cleanOldHistoryData(data.historyData);
+                
+                // 同步清理本地localStorage中的过期数据
+                cleanLocalStorageHistory();
+                
+                // 将清理后的历史数据同步到localStorage
+                for (const date in cleanedHistoryData) {
+                    const record = cleanedHistoryData[date];
+                    if (record.doneWords) {
+                        localStorage.setItem(`dictation_done_${date}`, JSON.stringify(record.doneWords));
+                    }
+                    if (record.wrongWords) {
+                        localStorage.setItem(`dictation_wrong_${date}`, JSON.stringify(record.wrongWords));
+                    }
+                    if (record.attempts !== undefined) {
+                        localStorage.setItem(`dictation_attempts_${date}`, JSON.stringify(record.attempts));
+                    }
+                    if (record.attemptedWords) {
+                        localStorage.setItem(`dictation_attempted_${date}`, JSON.stringify(record.attemptedWords));
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('解析 data.json 失败:', e);
+        }
+    }
+
+    return result;
+}
+
 
 // 新增：保存连续正确次数到 localStorage
 function saveStreaks() {
@@ -136,43 +504,6 @@ function getTodayAttemptedWords() {
     return new Set(val ? JSON.parse(val) : []);
 }
 
-document.getElementById('fileInput').addEventListener('change', function(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-
-    reader.onload = function(evt) {
-        // 当加载新文件时，清空之前的 streak 和保存的 words
-        // correctStreaks = {}; // 移除或注释掉这行
-        // saveStreaks(); // 移除或注释掉这行
-        localStorage.removeItem('dictation_words'); // 清除之前保存的单词列表
-
-        words = evt.target.result.split(/\r?\n/).map(w => w.trim()).filter(w => w.length > 0);
-        saveWords(); // 保存新加载的单词列表
-        if (words.length > 0) {
-            document.getElementById('startBtn').disabled = false;
-            // 文件加载成功，始终显示加载的单词数量
-            document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
-            // 新增：文件加载完成后预加载音频
-            preloadAudio(words);
-        } else {
-            document.getElementById('startBtn').disabled = true;
-            document.getElementById('summary').textContent = "文件无有效单词。";
-        }
-    };
-
-    // 新增：文件读取错误处理
-    reader.onerror = function(evt) {
-        console.error("文件读取失败:", evt.target.error);
-        document.getElementById('startBtn').disabled = true;
-        document.getElementById('summary').textContent = "加载文件失败，请重试。";
-        // 清空 words 列表，避免使用错误的数据
-        words = [];
-        localStorage.removeItem('dictation_words');
-    };
-
-    reader.readAsText(file, 'utf-8');
-});
 
 function shuffle(array) {
     for (let i = array.length - 1; i > 0; i--) {
@@ -222,6 +553,146 @@ function preloadAudio(wordList) {
 }
 
 
+// 比较用户输入和正确单词，返回带有红色标记的HTML
+function highlightIncorrectLetters(userInput, correctWord) {
+    if (!userInput || !correctWord) return userInput || '';
+    
+    let result = '';
+    const maxLength = Math.max(userInput.length, correctWord.length);
+    
+    for (let i = 0; i < maxLength; i++) {
+        const userChar = userInput[i] || '';
+        const correctChar = correctWord[i] || '';
+        
+        if (i < userInput.length) {
+            if (userChar.toLowerCase() === correctChar.toLowerCase()) {
+                result += userChar;
+            } else {
+                result += `<span style="color: red; font-weight: bold;">${userChar}</span>`;
+            }
+        }
+    }
+    
+    return result;
+}
+
+// 新的智能错误标注函数：返回用户输入和正确单词的标注结果
+function getErrorHighlighting(userInput, correctWord) {
+    if (!correctWord) return { userHighlight: userInput || '', correctHighlight: '' };
+    
+    // 特殊情况1：空输入 - 正确单词全部标红
+    if (!userInput || userInput.trim() === '') {
+        return {
+            userHighlight: '<em>（空输入）</em>',
+            correctHighlight: `<span style="color: red; font-weight: bold; background-color: #ffeeee;">${correctWord}</span>`
+        };
+    }
+    
+    const user = userInput.toLowerCase();
+    const correct = correctWord.toLowerCase();
+    
+    // 使用简单的编辑距离算法来找到最佳对齐
+    const alignment = findBestAlignment(user, correct);
+    
+    let correctResult = '';
+    let userResult = '';
+    let correctIndex = 0;
+    let userIndex = 0;
+    
+    for (const operation of alignment) {
+        if (operation.type === 'match') {
+            // 匹配的字符，正常显示
+            correctResult += correctWord[correctIndex];
+            userResult += userInput[userIndex];
+            correctIndex++;
+            userIndex++;
+        } else if (operation.type === 'substitute') {
+            // 替换错误，在正确字符上标注红色
+            correctResult += `<span style="color: red; font-weight: bold; background-color: #ffeeee;">${correctWord[correctIndex]}</span>`;
+            userResult += `<span style="color: red; font-weight: bold;">${userInput[userIndex]}</span>`;
+            correctIndex++;
+            userIndex++;
+        } else if (operation.type === 'insert') {
+            // 遗漏的字符，在正确位置标注红色
+            correctResult += `<span style="color: red; font-weight: bold; background-color: #ffeeee;">${correctWord[correctIndex]}</span>`;
+            correctIndex++;
+        } else if (operation.type === 'delete') {
+            // 用户多输入的字符，在用户输入中标注红色
+            userResult += `<span style="color: red; font-weight: bold; background-color: #ffeeee;">${userInput[userIndex]}</span>`;
+            userIndex++;
+        }
+    }
+    
+    return {
+        userHighlight: userResult,
+        correctHighlight: correctResult
+    };
+}
+
+// 找到最佳对齐的简化算法
+function findBestAlignment(user, correct) {
+    const m = user.length;
+    const n = correct.length;
+    
+    // 动态规划矩阵
+    const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+    const operations = Array(m + 1).fill(null).map(() => Array(n + 1).fill(''));
+    
+    // 初始化边界
+    for (let i = 0; i <= m; i++) {
+        dp[i][0] = i;
+        operations[i][0] = 'delete';
+    }
+    for (let j = 0; j <= n; j++) {
+        dp[0][j] = j;
+        operations[0][j] = 'insert';
+    }
+    
+    // 填充矩阵
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            if (user[i-1] === correct[j-1]) {
+                dp[i][j] = dp[i-1][j-1];
+                operations[i][j] = 'match';
+            } else {
+                const substitute = dp[i-1][j-1] + 1;
+                const insert = dp[i][j-1] + 1;
+                const del = dp[i-1][j] + 1;
+                
+                if (substitute <= insert && substitute <= del) {
+                    dp[i][j] = substitute;
+                    operations[i][j] = 'substitute';
+                } else if (insert <= del) {
+                    dp[i][j] = insert;
+                    operations[i][j] = 'insert';
+                } else {
+                    dp[i][j] = del;
+                    operations[i][j] = 'delete';
+                }
+            }
+        }
+    }
+    
+    // 回溯找到操作序列
+    const alignment = [];
+    let i = m, j = n;
+    
+    while (i > 0 || j > 0) {
+        const op = operations[i][j];
+        alignment.unshift({ type: op });
+        
+        if (op === 'match' || op === 'substitute') {
+            i--; j--;
+        } else if (op === 'insert') {
+            j--;
+        } else if (op === 'delete') {
+            i--;
+        }
+    }
+    
+    return alignment;
+}
+
 function updateSummary() {
     const wrongCount = wrongWords.length;
     const uniqueWordsCount = todayAttemptedWords.size;
@@ -236,24 +707,24 @@ function updateSummary() {
         // 使用 flexbox 容器让两个表格并排显示，移除 gap
         html += '<div style="display: flex; margin-top: 10px;">'; // 移除 gap: 20px;
 
-        // 第一个表格：只显示你的输入 (拼写错误的单词)
+        // 第一个表格：显示你的输入，标注错误
         html += '<div>';
         html += '<table border="1" style="border-collapse: collapse;">';
         html += '<tr><th>你的输入</th></tr>'; // 表头
         for (const item of wrongWords) {
-            // 如果输入为空，插入 &nbsp; 保持单元格高度
-            const userInput = item.input === '' ? '&nbsp;' : item.input;
-            html += `<tr><td>${userInput}</td></tr>`; // 只显示你的输入
+            const highlighting = getErrorHighlighting(item.input, item.word);
+            html += `<tr><td>${highlighting.userHighlight}</td></tr>`;
         }
         html += '</table>';
         html += '</div>';
 
-        // 第二个表格：只显示正确拼写
+        // 第二个表格：显示正确拼写，标注错误位置
         html += '<div>';
         html += '<table border="1" style="border-collapse: collapse;">';
         html += '<tr><th>正确拼写</th></tr>'; // 表头
         for (const item of wrongWords) {
-            html += `<tr><td>${item.word}</td></tr>`; // 只显示正确拼写
+            const highlighting = getErrorHighlighting(item.input, item.word);
+            html += `<tr><td>${highlighting.correctHighlight}</td></tr>`;
         }
         html += '</table>';
         html += '</div>';
@@ -331,8 +802,14 @@ function submitAnswer() {
         correctStreaks[word] = (correctStreaks[word] || 0) + 1;
         saveStreaks(); // 保存 streak 变化
 
-        if (correctStreaks[word] >= 5) { // 修改为5次
-            // 连续正确达到5次，从 words 列表中移除该单词
+        if (correctStreaks[word] >= 7) { // 修改为7次
+            // 连续正确达到7次，将单词移入已掌握列表
+            masteredWords.push({
+                word: word,
+                masteredDate: new Date().toISOString().split('T')[0] // YYYY-MM-DD 格式
+            });
+            
+            // 从当前学习列表中移除该单词
             words = words.filter(w => w !== word);
             saveWords(); // 保存更新后的 words 列表
 
@@ -340,7 +817,7 @@ function submitAnswer() {
             delete correctStreaks[word];
             saveStreaks(); // 保存更新后的 streak 记录
 
-            document.getElementById('result').innerHTML += `<span style="color:blue;">（连续5次正确，从列表中移除）</span>`;
+            document.getElementById('result').innerHTML += `<span style="color:blue;">（连续7次正确，已掌握）</span>`;
 
             current++;
             setTimeout(() => {
@@ -359,8 +836,9 @@ function submitAnswer() {
             saveTodayDoneWords(doneWords);
         }
     } else {
+        const highlighting = getErrorHighlighting(input, word);
         document.getElementById('result').innerHTML =
-            `<span class="wrong">错误</span>，你的输入：<b>${input}</b>，正确拼写是：<b>${word}</b>`;
+            `<span class="wrong">错误</span>，你的输入：<b>${highlighting.userHighlight}</b>，正确拼写：<b>${highlighting.correctHighlight}</b>`;
         wrongWords.push({input: input, word: word});
         saveTodayWrongWords(wrongWords); // 保存错误单词
 
@@ -369,6 +847,10 @@ function submitAnswer() {
         saveStreaks(); // 保存 streak 变化
     }
     updateSummary(); // 更新统计显示
+    
+    // 自动同步数据到Gist
+    autoSyncToGist();
+    
     current++;
     setTimeout(() => {
         if (current < shuffledWords.length) {
@@ -404,66 +886,458 @@ document.getElementById('wordInput').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') submitAnswer();
 });
 
-document.getElementById('resetBtn').onclick = function() {
-    // 清除当天已背单词、错误单词和总尝试次数
-    const key1 = "dictation_done_" + getTodayStr();
-    const key2 = "dictation_wrong_" + getTodayStr();
-    const key3 = "dictation_attempts_" + getTodayStr();
-    const key4 = "dictation_attempted_" + getTodayStr();
 
-    localStorage.removeItem(key1);
-    localStorage.removeItem(key2);
-    localStorage.removeItem(key3);
-    localStorage.removeItem(key4);
 
-    wrongWords = [];
-    todayAttempts = 0;
-    todayAttemptedWords.clear();
+// 保存数据到Gist（包含历史数据）
+async function saveToGistWithHistory(data) {
+    if (!githubConfig.token) {
+        throw new Error('GitHub token 未配置');
+    }
 
-    updateSummary();
-    alert("当天听写记录已重置！");
-    // 注意：重置按钮不清除 words 和 streaks，因为它们是针对整个单词列表的，不是针对当天的。
-    // 如果需要重置 words 和 streaks，需要另外的按钮或逻辑。
-};
+    // 清理历史数据（保留15天内的记录）
+    const cleanedHistoryData = cleanOldHistoryData(data.historyData || {});
+    
+    const gistData = {
+        description: "单词听写数据",
+        public: false,
+        files: {
+            "words.txt": {
+                content: data.words.join('\n')
+            },
+            "data.json": {
+                content: JSON.stringify({
+                    correctStreaks: data.correctStreaks || {},
+                    masteredWords: data.masteredWords || [],
+                    todayRecords: {
+                        date: getTodayStr(),
+                        doneWords: data.todayDoneWords || [],
+                        wrongWords: data.todayWrongWords || [],
+                        attempts: data.todayAttempts || 0,
+                        attemptedWords: Array.from(data.todayAttemptedWords || [])
+                    },
+                    historyData: cleanedHistoryData // 清理后的历史数据
+                }, null, 2)
+            }
+        }
+    };
+
+    let url = githubConfig.gistId 
+        ? `https://api.github.com/gists/${githubConfig.gistId}`
+        : 'https://api.github.com/gists';
+    
+    let method = githubConfig.gistId ? 'PATCH' : 'POST';
+
+    let response = await fetch(url, {
+        method: method,
+        headers: {
+            'Authorization': `token ${githubConfig.token}`,
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(gistData)
+    });
+
+    // 如果是404错误（Gist不存在），则创建新的Gist
+    if (response.status === 404 && githubConfig.gistId) {
+        console.log('原Gist不存在，创建新的Gist...');
+        url = 'https://api.github.com/gists';
+        method = 'POST';
+        
+        response = await fetch(url, {
+            method: method,
+            headers: {
+                'Authorization': `token ${githubConfig.token}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(gistData)
+        });
+    }
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error('GitHub API 错误详情:', {
+            status: response.status,
+            statusText: response.statusText,
+            url: url,
+            method: method,
+            response: errorText
+        });
+        throw new Error(`GitHub API 错误: ${response.status} ${response.statusText}\n详情: ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    // 如果是新创建的Gist，更新ID并记录
+    if (method === 'POST') {
+        const oldGistId = githubConfig.gistId;
+        githubConfig.gistId = result.id;
+        console.log('新创建的 Gist ID:', result.id);
+        
+        if (oldGistId) {
+            console.log(`原Gist不存在，已创建新的 Gist，ID: ${result.id}`);
+        } else {
+            console.log(`已创建新的 Gist，ID: ${result.id}`);
+        }
+    }
+    
+    return result;
+}
+
+
+// 显示绿色成功提示
+function showSuccessMessage(message, duration = 3000) {
+    const messageDiv = document.getElementById('successMessage');
+    messageDiv.textContent = message;
+    messageDiv.style.display = 'block';
+    
+    // 自动隐藏
+    setTimeout(() => {
+        messageDiv.style.display = 'none';
+    }, duration);
+}
+
+// 显示红色错误警告
+function showErrorMessage(message, duration = 5000) {
+    const messageDiv = document.getElementById('errorMessage');
+    messageDiv.textContent = message;
+    messageDiv.style.display = 'block';
+    
+    // 自动隐藏
+    setTimeout(() => {
+        messageDiv.style.display = 'none';
+    }, duration);
+}
+
+// 自动同步到Gist（静默）
+async function autoSyncToGist() {
+    if (!githubConfig.token || !githubConfig.gistId) {
+        console.log('GitHub配置不完整，跳过自动同步');
+        return;
+    }
+    
+    try {
+        // 收集现有的历史数据（从localStorage）
+        const existingHistoryData = {};
+        
+        // 扫描localStorage中的历史记录
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && (key.startsWith('dictation_done_') || 
+                       key.startsWith('dictation_wrong_') || 
+                       key.startsWith('dictation_attempts_') ||
+                       key.startsWith('dictation_attempted_'))) {
+                
+                const dateMatch = key.match(/_(\d{4}-\d+-\d+)$/);
+                if (dateMatch) {
+                    const date = dateMatch[1];
+                    if (!existingHistoryData[date]) {
+                        existingHistoryData[date] = {};
+                    }
+                    
+                    if (key.includes('_done_')) {
+                        existingHistoryData[date].doneWords = JSON.parse(localStorage.getItem(key) || '[]');
+                    } else if (key.includes('_wrong_')) {
+                        existingHistoryData[date].wrongWords = JSON.parse(localStorage.getItem(key) || '[]');
+                    } else if (key.includes('_attempts_')) {
+                        existingHistoryData[date].attempts = JSON.parse(localStorage.getItem(key) || '0');
+                    } else if (key.includes('_attempted_')) {
+                        existingHistoryData[date].attemptedWords = JSON.parse(localStorage.getItem(key) || '[]');
+                    }
+                }
+            }
+        }
+        
+        // 准备同步数据
+        const syncData = {
+            words: words,
+            correctStreaks: correctStreaks,
+            masteredWords: masteredWords,
+            todayDoneWords: getTodayDoneWords(),
+            todayWrongWords: wrongWords,
+            todayAttempts: todayAttempts,
+            todayAttemptedWords: todayAttemptedWords,
+            historyData: existingHistoryData
+        };
+        
+        // 静默同步到Gist
+        await saveToGist(syncData);
+        console.log('自动同步成功');
+        
+    } catch (error) {
+        console.error('自动同步失败:', error);
+        // 静默失败，不影响用户体验
+    }
+}
+
+// 折叠/展开添加新词功能
+document.getElementById('toggleAddWordBtn').addEventListener('click', function() {
+    const panel = document.getElementById('addWordPanel');
+    const icon = document.getElementById('toggleIcon');
+    
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+        icon.textContent = '▼';
+        // 展开时自动聚焦到输入框
+        setTimeout(() => {
+            document.getElementById('newWordInput').focus();
+        }, 100);
+    } else {
+        panel.style.display = 'none';
+        icon.textContent = '▶';
+        // 折叠时清空输入框
+        document.getElementById('newWordInput').value = '';
+    }
+});
+
+
+// 添加新词功能
+document.getElementById('addWordBtn').addEventListener('click', function() {
+    const newWord = document.getElementById('newWordInput').value.trim();
+    
+    if (!newWord) {
+        alert('请输入要添加的单词');
+        return;
+    }
+    
+    // 检查单词是否已存在
+    if (words.includes(newWord)) {
+        alert('该单词已存在于列表中');
+        return;
+    }
+    
+    // 检查单词是否在已掌握列表中
+    if (masteredWords.some(item => item.word === newWord)) {
+        alert('该单词已在已掌握列表中');
+        return;
+    }
+    
+    // 添加到单词列表
+    words.push(newWord);
+    saveWords(); // 保存到本地存储
+    
+    // 清空输入框并折叠面板
+    document.getElementById('newWordInput').value = '';
+    const panel = document.getElementById('addWordPanel');
+    const icon = document.getElementById('toggleIcon');
+    panel.style.display = 'none';
+    icon.textContent = '▶';
+    
+    // 更新界面显示
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('summary').textContent = `当前单词列表有 ${words.length} 个单词。`;
+    
+    // 显示绿色成功提示
+    showSuccessMessage(`✓ 成功添加单词: ${newWord}`);
+    
+    // 自动同步到Gist
+    autoSyncToGist();
+});
+
+// 测试新词发音功能
+document.getElementById('testNewWordBtn').addEventListener('click', function() {
+    const newWord = document.getElementById('newWordInput').value.trim();
+    
+    if (!newWord) {
+        alert('请先输入要测试的单词');
+        return;
+    }
+    
+    speakWord(newWord);
+});
+
+// 新词输入框回车键支持
+document.getElementById('newWordInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+        document.getElementById('addWordBtn').click();
+    }
+});
+
+// GitHub配置相关事件处理
+document.getElementById('saveConfigBtn').addEventListener('click', function() {
+    const token = document.getElementById('tokenInput').value.trim();
+    const gistId = document.getElementById('gistIdInput').value.trim();
+    
+    if (!token || !gistId) {
+        showErrorMessage('请填写完整的Token和Gist ID');
+        return;
+    }
+    
+    // 验证token格式（GitHub token通常以ghp_开头）
+    if (!token.startsWith('ghp_') && !token.startsWith('github_pat_')) {
+        showErrorMessage('Token格式可能不正确，GitHub Personal Access Token通常以ghp_开头');
+        return;
+    }
+    
+    // 保存配置
+    if (saveGitHubConfig(token, gistId)) {
+        // 更新全局配置
+        githubConfig.token = token;
+        githubConfig.gistId = gistId;
+        
+        showSuccessMessage('✓ GitHub配置保存成功！');
+        
+        // 隐藏配置面板
+        document.getElementById('configPanel').style.display = 'none';
+        
+        // 清空输入框
+        document.getElementById('tokenInput').value = '';
+        document.getElementById('gistIdInput').value = '';
+        
+        // 尝试加载数据
+        loadDataFromGist();
+    } else {
+        showErrorMessage('配置保存失败，请重试');
+    }
+});
+
+// 测试配置连接
+document.getElementById('testConfigBtn').addEventListener('click', async function() {
+    const token = document.getElementById('tokenInput').value.trim();
+    const gistId = document.getElementById('gistIdInput').value.trim();
+    
+    if (!token || !gistId) {
+        showErrorMessage('请先填写Token和Gist ID');
+        return;
+    }
+    
+    this.textContent = '测试中...';
+    this.disabled = true;
+    
+    try {
+        const response = await fetch(`https://api.github.com/gists/${gistId}`, {
+            headers: {
+                'Authorization': `token ${token}`,
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        });
+        
+        if (response.ok) {
+            showSuccessMessage('✓ 连接测试成功！');
+        } else {
+            showErrorMessage(`连接测试失败：${response.status} ${response.statusText}`);
+        }
+    } catch (error) {
+        showErrorMessage(`连接测试失败：${error.message}`);
+    }
+    
+    this.textContent = '测试连接';
+    this.disabled = false;
+});
+
+// 显示配置面板
+function showConfigPanel() {
+    document.getElementById('configPanel').style.display = 'block';
+    setTimeout(() => {
+        document.getElementById('tokenInput').focus();
+    }, 100);
+}
+
+
+
+
+// 从 Gist 加载数据的功能
+async function loadDataFromGist() {
+    if (!githubConfig.token || !githubConfig.gistId) {
+        return false;
+    }
+    
+    try {
+        const data = await loadFromGist();
+        
+        // 应用加载的数据
+        words = data.words;
+        correctStreaks = data.correctStreaks;
+        masteredWords = data.masteredWords;
+        wrongWords = data.todayWrongWords;
+        todayAttempts = data.todayAttempts;
+        todayAttemptedWords = new Set(data.todayAttemptedWords);
+        
+        // 更新界面
+        if (words.length > 0) {
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('summary').textContent = `从 Gist 加载了 ${words.length} 个单词。`;
+        }
+        
+        updateSummary();
+        return true;
+        
+    } catch (error) {
+        console.error('从 Gist 加载数据失败:', error);
+        return false;
+    }
+}
+
 
 // 页面加载时恢复数据
-window.addEventListener('load', function() {
-    // 恢复错误单词和总尝试次数
+window.addEventListener('load', async function() {
+    
+    // 清理本地过期的历史数据
+    cleanLocalStorageHistory();
+    
+    // 检查是否已有配置
+    if (hasValidConfig()) {
+        // 从localStorage加载配置
+        const config = loadGitHubConfig();
+        githubConfig.token = config.token;
+        githubConfig.gistId = config.gistId;
+        
+        console.log('使用已保存的GitHub配置');
+        
+        // 尝试从 Gist 加载数据
+        const gistLoaded = await loadDataFromGist();
+        
+        if (!gistLoaded) {
+            // 显示Gist加载失败的警告
+            showErrorMessage('⚠️ Gist数据加载失败，已切换到本地缓存模式。');
+            
+            // 从本地存储恢复基本数据
+            loadLocalData();
+        }
+    } else {
+        // 没有配置，显示配置面板
+        console.log('未找到GitHub配置，显示配置面板');
+        showConfigPanel();
+        document.getElementById('summary').textContent = "请先配置GitHub信息以同步数据。";
+        
+        // 同时尝试加载本地数据
+        loadLocalData();
+    }
+});
+
+// 加载本地数据的函数
+function loadLocalData() {
     wrongWords = getTodayWrongWords();
     todayAttempts = getTodayAttempts();
     todayAttemptedWords = getTodayAttemptedWords();
 
-    updateSummary(); // 首次加载时更新统计和错误列表
-
-    // 恢复 words 列表和 streaks
+    // 恢复本地保存的单词列表和学习进度
     const savedWords = localStorage.getItem('dictation_words');
     if (savedWords) {
         words = JSON.parse(savedWords);
-        // 如果 words 恢复了，启用开始按钮
         if (words.length > 0) {
-             document.getElementById('startBtn').disabled = false;
-             // 页面加载时，如果文件已加载，summary 显示加载的单词数
-             // 如果当天有听写记录，updateSummary 会覆盖这个显示
-             // 为了避免冲突，可以在这里只显示加载单词数，让 updateSummary 处理听写统计
-             document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
-        } else {
-             document.getElementById('startBtn').disabled = true;
-             document.getElementById('summary').textContent = "文件无有效单词。";
+            document.getElementById('startBtn').disabled = false;
+            if (document.getElementById('summary').textContent.includes('请先配置')) {
+                document.getElementById('summary').textContent = `找到本地缓存的 ${words.length} 个单词，建议配置GitHub以同步最新数据。`;
+            } else {
+                document.getElementById('summary').textContent = `从本地缓存加载了 ${words.length} 个单词。`;
+            }
         }
     }
-    // 如果没有保存的 words，文件输入框会处理加载
 
     const savedStreaks = localStorage.getItem('dictation_streaks');
     if (savedStreaks) {
         correctStreaks = JSON.parse(savedStreaks);
     }
 
-    // 如果页面加载时已经有当天的听写记录 (通过恢复 wrongWords 或 todayAttempts 判断)
-    // 确保 summary 显示的是当天的统计，而不是文件加载信息
-    if (wrongWords.length > 0 || todayAttempts > 0) {
-         updateSummary();
+    updateSummary();
+    
+    // 如果没有任何数据且没有配置，提示用户
+    if (words.length === 0 && !hasValidConfig()) {
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('summary').textContent = "请配置GitHub信息以开始使用。";
     }
-});
+}
     </script>
 </body>
 </html>
