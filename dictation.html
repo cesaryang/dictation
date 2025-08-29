@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>单词听写 Web 版</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        #wordInput { font-size: 1.2em; }
+        #result { margin-top: 10px; font-size: 1.2em; }
+        .correct { color: green; }
+        .wrong { color: red; }
+        #summary { margin-top: 20px; font-size: 1.1em; }
+        #startBtn { font-size: 1em; padding: 6px 16px; }
+        table { border-collapse: collapse; } /* 移除 width: 100%; */
+        th, td { padding: 8px 12px; text-align: left; border: 1px solid #ddd; }
+        th { background-color: #f2f2f2; }
+        /* 减小错误单词列表的字号 */
+        #wrongList {
+            margin-top: 20px;
+            color: #b22222;
+            font-size: 0.9em; /* 或者使用 'small' */
+        }
+    </style>
+</head>
+<body>
+    <h2>单词听写 Web 版</h2>
+    <div>
+        <input type="file" id="fileInput" accept=".txt">
+        <button id="startBtn" disabled>开始背词</button>
+    </div>
+    <div id="dictationArea" style="margin-top:20px; display:none;">
+        <span>请输入你听到的单词：</span>
+        <input type="text" id="wordInput" autocomplete="off">
+        <button id="repeatBtn" type="button">重听</button>
+        <div id="result"></div>
+    </div>
+    <div id="summary"></div>
+    <div>
+        <button id="resetBtn" type="button" style="margin-top:10px;">重置当天听写记录</button>
+    </div>
+    <!-- 在 summary 下方增加一个错误单词列表的显示区域 -->
+    <div id="wrongList" style="margin-top:20px; color:#b22222;"></div>
+
+    <script>
+let words = []; // 存储从文件加载的原始单词列表
+let shuffledWords = []; // 存储当前轮次需要听写的单词
+let current = 0;
+let isStarted = false;
+let wrongWords = []; // 存储当天听写错误的单词
+const synth = window.speechSynthesis;
+
+// 新增：存储每个单词的连续正确次数
+let correctStreaks = {};
+// 如何查看已背正确次数：打开浏览器开发者工具 (通常按 F12)，切换到 Console (控制台) 标签页，输入 correctStreaks 并按 Enter 即可查看每个单词的连续正确次数。
+
+// 新增：存储当天总尝试次数
+let todayAttempts = 0;
+// 新增：存储当天尝试过的唯一单词
+let todayAttemptedWords = new Set();
+
+// 新增：保存连续正确次数到 localStorage
+function saveStreaks() {
+    localStorage.setItem('dictation_streaks', JSON.stringify(correctStreaks));
+}
+
+// 新增：保存当前剩余单词列表到 localStorage
+function saveWords() {
+    localStorage.setItem('dictation_words', JSON.stringify(words));
+}
+
+// 新增：保存当天总尝试次数
+function saveTodayAttempts(attempts) {
+    const key = "dictation_attempts_" + getTodayStr();
+    localStorage.setItem(key, JSON.stringify(attempts));
+}
+
+// 新增：获取当天总尝试次数
+function getTodayAttempts() {
+    const key = "dictation_attempts_" + getTodayStr();
+    const val = localStorage.getItem(key);
+    return val ? JSON.parse(val) : 0; // 如果没有记录，默认为0
+}
+
+// 获取当天日期字符串 (凌晨4点为分界线)
+function getTodayStr() {
+    const now = new Date();
+    const hour = now.getHours();
+    const date = new Date(now); // 创建一个副本，避免修改原始 now 对象
+
+    // 如果当前时间在凌晨0点到4点之间，则视为前一天
+    if (hour < 4) {
+        date.setDate(date.getDate() - 1);
+    }
+
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1; // 月份从0开始，需要加1
+    const day = date.getDate();
+
+    // 格式化为 YYYY-MM-DD
+    return `${year}-${month}-${day}`;
+}
+
+// 获取当天已背单词
+function getTodayDoneWords() {
+    const key = "dictation_done_" + getTodayStr();
+    const val = localStorage.getItem(key);
+    return val ? JSON.parse(val) : [];
+}
+
+// 保存当天已背单词
+function saveTodayDoneWords(doneWords) {
+    const key = "dictation_done_" + getTodayStr();
+    localStorage.setItem(key, JSON.stringify(doneWords));
+}
+
+function saveTodayWrongWords(wrongWords) {
+    const key = "dictation_wrong_" + getTodayStr();
+    localStorage.setItem(key, JSON.stringify(wrongWords));
+}
+
+function getTodayWrongWords() {
+    const key = "dictation_wrong_" + getTodayStr();
+    const val = localStorage.getItem(key);
+    return val ? JSON.parse(val) : [];
+}
+
+// 添加新的存取函数
+function saveTodayAttemptedWords() {
+    const key = "dictation_attempted_" + getTodayStr();
+    localStorage.setItem(key, JSON.stringify(Array.from(todayAttemptedWords)));
+}
+
+function getTodayAttemptedWords() {
+    const key = "dictation_attempted_" + getTodayStr();
+    const val = localStorage.getItem(key);
+    return new Set(val ? JSON.parse(val) : []);
+}
+
+document.getElementById('fileInput').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+
+    reader.onload = function(evt) {
+        // 当加载新文件时，清空之前的 streak 和保存的 words
+        // correctStreaks = {}; // 移除或注释掉这行
+        // saveStreaks(); // 移除或注释掉这行
+        localStorage.removeItem('dictation_words'); // 清除之前保存的单词列表
+
+        words = evt.target.result.split(/\r?\n/).map(w => w.trim()).filter(w => w.length > 0);
+        saveWords(); // 保存新加载的单词列表
+        if (words.length > 0) {
+            document.getElementById('startBtn').disabled = false;
+            // 文件加载成功，始终显示加载的单词数量
+            document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
+            // 新增：文件加载完成后预加载音频
+            preloadAudio(words);
+        } else {
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('summary').textContent = "文件无有效单词。";
+        }
+    };
+
+    // 新增：文件读取错误处理
+    reader.onerror = function(evt) {
+        console.error("文件读取失败:", evt.target.error);
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('summary').textContent = "加载文件失败，请重试。";
+        // 清空 words 列表，避免使用错误的数据
+        words = [];
+        localStorage.removeItem('dictation_words');
+    };
+
+    reader.readAsText(file, 'utf-8');
+});
+
+function shuffle(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+}
+
+function speakWord(word) {
+    if (synth.speaking) {
+        synth.cancel();
+    }
+
+    const voices = synth.getVoices();
+    if (voices.length === 0) {
+        // Voices are loaded asynchronously. Wait for them and retry.
+        synth.onvoiceschanged = () => speakWord(word);
+        return;
+    }
+
+    const voice = voices.find(v => v.name.includes('Google US English')) || voices.find(v => v.lang.startsWith('en-US')) || voices[0];
+    
+    const utter = new SpeechSynthesisUtterance(word);
+    utter.lang = 'en-US';
+    if (voice) {
+        utter.voice = voice;
+    }
+    utter.rate = 1.0;
+    utter.onerror = (event) => console.error("Speech synthesis error:", event.error);
+
+    synth.speak(utter);
+}
+
+// 新增：预加载单词发音
+function preloadAudio(wordList) {
+    const voices = synth.getVoices();
+    const voice = voices.find(v => v.name.includes('Google US English')) || voices[0]; // 使用相同的语音
+    wordList.forEach(word => {
+        const utter = new SpeechSynthesisUtterance(word);
+        utter.lang = 'en-US';
+        if (voice) utter.voice = voice;
+        utter.volume = 0; // 设置音量为0，进行预加载
+        // 浏览器会自动将这些utterance加入队列并处理
+        synth.speak(utter);
+    });
+    console.log(`尝试预加载 ${wordList.length} 个单词的发音...`); // 可选：在控制台输出提示
+}
+
+
+function updateSummary() {
+    const wrongCount = wrongWords.length;
+    const uniqueWordsCount = todayAttemptedWords.size;
+    const correctCount = Math.max(0, todayAttempts - wrongCount);
+
+    document.getElementById('summary').textContent =
+        `今天已背 ${uniqueWordsCount} 个单词，正确 ${correctCount} 次，错误 ${wrongCount} 次。`;
+    // 更新错误单词列表
+    let html = '';
+    if (wrongWords.length > 0) {
+        html = '<b>拼写错误列表：</b>';
+        // 使用 flexbox 容器让两个表格并排显示，移除 gap
+        html += '<div style="display: flex; margin-top: 10px;">'; // 移除 gap: 20px;
+
+        // 第一个表格：只显示你的输入 (拼写错误的单词)
+        html += '<div>';
+        html += '<table border="1" style="border-collapse: collapse;">';
+        html += '<tr><th>你的输入</th></tr>'; // 表头
+        for (const item of wrongWords) {
+            // 如果输入为空，插入 &nbsp; 保持单元格高度
+            const userInput = item.input === '' ? '&nbsp;' : item.input;
+            html += `<tr><td>${userInput}</td></tr>`; // 只显示你的输入
+        }
+        html += '</table>';
+        html += '</div>';
+
+        // 第二个表格：只显示正确拼写
+        html += '<div>';
+        html += '<table border="1" style="border-collapse: collapse;">';
+        html += '<tr><th>正确拼写</th></tr>'; // 表头
+        for (const item of wrongWords) {
+            html += `<tr><td>${item.word}</td></tr>`; // 只显示正确拼写
+        }
+        html += '</table>';
+        html += '</div>';
+
+        html += '</div>'; // 关闭 flex 容器
+    }
+    document.getElementById('wrongList').innerHTML = html;
+}
+
+function startDictation() {
+    // 过滤掉当天已背过的单词
+    const doneWords = getTodayDoneWords();
+    // 使用当前words列表进行过滤
+    shuffledWords = words.filter(w => !doneWords.includes(w));
+    shuffle(shuffledWords);
+    current = 0;
+    // total = 0; // 移除此行
+    // correct = 0; // 移除此行
+    // 不要清空 wrongWords
+    // wrongWords = [];
+    isStarted = true;
+    document.getElementById('dictationArea').style.display = '';
+    document.getElementById('startBtn').style.display = 'none';
+    document.getElementById('result').textContent = '';
+    document.getElementById('wordInput').value = '';
+    document.getElementById('wordInput').focus();
+
+    // 在开始听写时加载当天的尝试次数和错误列表
+    wrongWords = getTodayWrongWords();
+    todayAttempts = getTodayAttempts();
+    todayAttemptedWords = getTodayAttemptedWords();
+
+    updateSummary(); // 更新显示
+
+    if (shuffledWords.length === 0) {
+        document.getElementById('result').innerHTML = '<span class="correct">今天的单词都已背过！</span>';
+        setTimeout(endDictation, 2000);
+    } else {
+        nextWord();
+    }
+}
+
+function nextWord() {
+    if (current < shuffledWords.length) {
+        // 先播放发音
+        speakWord(shuffledWords[current]);
+        // 再清除输入框内容
+        document.getElementById('wordInput').value = '';
+        document.getElementById('wordInput').focus();
+    } else {
+        endDictation();
+    }
+}
+
+function submitAnswer() {
+    if (!isStarted) return;
+    const input = document.getElementById('wordInput').value.trim().toLowerCase();
+    const answer = shuffledWords[current].toLowerCase();
+    const word = shuffledWords[current];
+
+    // 记录尝试过的唯一单词
+    todayAttemptedWords.add(word);
+    saveTodayAttemptedWords();
+
+    // 每次提交答案，总尝试次数加一
+    todayAttempts++;
+    saveTodayAttempts(todayAttempts);
+
+    let doneWords = getTodayDoneWords();
+
+    if (input === answer) {
+        document.getElementById('result').innerHTML = '<span class="correct">正确！</span>';
+        // correct++; // 这个变量似乎没有在 summary 中使用
+        // 连续正确计数逻辑
+        correctStreaks[word] = (correctStreaks[word] || 0) + 1;
+        saveStreaks(); // 保存 streak 变化
+
+        if (correctStreaks[word] >= 5) { // 修改为5次
+            // 连续正确达到5次，从 words 列表中移除该单词
+            words = words.filter(w => w !== word);
+            saveWords(); // 保存更新后的 words 列表
+
+            // 从 streak 记录中移除该单词，保持记录干净
+            delete correctStreaks[word];
+            saveStreaks(); // 保存更新后的 streak 记录
+
+            document.getElementById('result').innerHTML += `<span style="color:blue;">（连续5次正确，从列表中移除）</span>`;
+
+            current++;
+            setTimeout(() => {
+                if (current < shuffledWords.length) {
+                    nextWord();
+                } else {
+                    endDictation();
+                }
+            }, 600);
+            return;
+        }
+
+        // 如果这个单词是第一次正确，才加入 doneWords
+        if (!doneWords.includes(word)) {
+            doneWords.push(word);
+            saveTodayDoneWords(doneWords);
+        }
+    } else {
+        document.getElementById('result').innerHTML =
+            `<span class="wrong">错误</span>，你的输入：<b>${input}</b>，正确拼写是：<b>${word}</b>`;
+        wrongWords.push({input: input, word: word});
+        saveTodayWrongWords(wrongWords); // 保存错误单词
+
+        // 连续正确计数逻辑：答错清零
+        correctStreaks[word] = 0;
+        saveStreaks(); // 保存 streak 变化
+    }
+    updateSummary(); // 更新统计显示
+    current++;
+    setTimeout(() => {
+        if (current < shuffledWords.length) {
+            nextWord();
+        } else {
+            endDictation();
+        }
+    }, 600);
+}
+
+document.getElementById('wordInput').addEventListener('input', function(e) {
+    if (document.getElementById('result').textContent !== '') {
+        document.getElementById('result').textContent = '';
+    }
+});
+
+// 重听按钮功能
+document.getElementById('repeatBtn').onclick = function() {
+    if (isStarted && current < shuffledWords.length) {
+        speakWord(shuffledWords[current]);
+    }
+};
+
+function endDictation() {
+    isStarted = false;
+    document.getElementById('dictationArea').style.display = 'none';
+    document.getElementById('startBtn').style.display = '';
+    updateSummary();
+}
+
+document.getElementById('startBtn').onclick = startDictation;
+document.getElementById('wordInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') submitAnswer();
+});
+
+document.getElementById('resetBtn').onclick = function() {
+    // 清除当天已背单词、错误单词和总尝试次数
+    const key1 = "dictation_done_" + getTodayStr();
+    const key2 = "dictation_wrong_" + getTodayStr();
+    const key3 = "dictation_attempts_" + getTodayStr();
+    const key4 = "dictation_attempted_" + getTodayStr();
+
+    localStorage.removeItem(key1);
+    localStorage.removeItem(key2);
+    localStorage.removeItem(key3);
+    localStorage.removeItem(key4);
+
+    wrongWords = [];
+    todayAttempts = 0;
+    todayAttemptedWords.clear();
+
+    updateSummary();
+    alert("当天听写记录已重置！");
+    // 注意：重置按钮不清除 words 和 streaks，因为它们是针对整个单词列表的，不是针对当天的。
+    // 如果需要重置 words 和 streaks，需要另外的按钮或逻辑。
+};
+
+// 页面加载时恢复数据
+window.addEventListener('load', function() {
+    // 恢复错误单词和总尝试次数
+    wrongWords = getTodayWrongWords();
+    todayAttempts = getTodayAttempts();
+    todayAttemptedWords = getTodayAttemptedWords();
+
+    updateSummary(); // 首次加载时更新统计和错误列表
+
+    // 恢复 words 列表和 streaks
+    const savedWords = localStorage.getItem('dictation_words');
+    if (savedWords) {
+        words = JSON.parse(savedWords);
+        // 如果 words 恢复了，启用开始按钮
+        if (words.length > 0) {
+             document.getElementById('startBtn').disabled = false;
+             // 页面加载时，如果文件已加载，summary 显示加载的单词数
+             // 如果当天有听写记录，updateSummary 会覆盖这个显示
+             // 为了避免冲突，可以在这里只显示加载单词数，让 updateSummary 处理听写统计
+             document.getElementById('summary').textContent = `已加载单词 ${words.length} 个。`;
+        } else {
+             document.getElementById('startBtn').disabled = true;
+             document.getElementById('summary').textContent = "文件无有效单词。";
+        }
+    }
+    // 如果没有保存的 words，文件输入框会处理加载
+
+    const savedStreaks = localStorage.getItem('dictation_streaks');
+    if (savedStreaks) {
+        correctStreaks = JSON.parse(savedStreaks);
+    }
+
+    // 如果页面加载时已经有当天的听写记录 (通过恢复 wrongWords 或 todayAttempts 判断)
+    // 确保 summary 显示的是当天的统计，而不是文件加载信息
+    if (wrongWords.length > 0 || todayAttempts > 0) {
+         updateSummary();
+    }
+});
+    </script>
+</body>
+</html>
