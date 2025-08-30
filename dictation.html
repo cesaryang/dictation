@@ -90,6 +90,7 @@
     <script>
 let words = []; // 存储从文件加载的原始单词列表
 let shuffledWords = []; // 存储当前轮次需要听写的单词
+let masteredWordsInTest = []; // 存储当前测试中的已掌握单词
 let current = 0;
 let isStarted = false;
 let wrongWords = []; // 存储当天听写错误的单词
@@ -163,13 +164,31 @@ function hasValidConfig() {
 // 已掌握的单词列表（连续7次正确后移入此列表）
 let masteredWords = [];
 
-// 清理超过15天的历史记录
+// 获取需要重新测试的已掌握单词（每5天测试一次）
+function getMasteredWordsDueForTesting() {
+    const today = new Date();
+    const dueDays = 5; // 每5天测试一次
+    
+    return masteredWords.filter(item => {
+        if (!item.lastTestDate) {
+            // 如果没有lastTestDate，使用masteredDate作为初始测试日期
+            item.lastTestDate = item.masteredDate;
+        }
+        
+        const lastTestDate = new Date(item.lastTestDate);
+        const daysSinceLastTest = Math.floor((today - lastTestDate) / (1000 * 60 * 60 * 24));
+        
+        return daysSinceLastTest >= dueDays;
+    }).map(item => item.word);
+}
+
+// 清理超过3天的历史记录
 function cleanOldHistoryData(historyData) {
     if (!historyData) return {};
     
     const today = new Date();
-    const fifteenDaysAgo = new Date(today);
-    fifteenDaysAgo.setDate(today.getDate() - 15);
+    const threeDaysAgo = new Date(today);
+    threeDaysAgo.setDate(today.getDate() - 3);
     
     const cleanedData = {};
     
@@ -182,8 +201,8 @@ function cleanOldHistoryData(historyData) {
             const day = parseInt(dateParts[2]);
             const recordDate = new Date(year, month, day);
             
-            // 保留15天内的记录
-            if (recordDate >= fifteenDaysAgo) {
+            // 保留3天内的记录
+            if (recordDate >= threeDaysAgo) {
                 cleanedData[dateStr] = historyData[dateStr];
             } else {
                 console.log(`删除过期记录: ${dateStr}`);
@@ -197,8 +216,8 @@ function cleanOldHistoryData(historyData) {
 // 清理本地localStorage中的过期历史数据
 function cleanLocalStorageHistory() {
     const today = new Date();
-    const fifteenDaysAgo = new Date(today);
-    fifteenDaysAgo.setDate(today.getDate() - 15);
+    const threeDaysAgo = new Date(today);
+    threeDaysAgo.setDate(today.getDate() - 3);
     
     const keysToDelete = [];
     
@@ -219,8 +238,8 @@ function cleanLocalStorageHistory() {
                     const day = parseInt(dateParts[2]);
                     const recordDate = new Date(year, month, day);
                     
-                    // 标记超过15天的记录为待删除
-                    if (recordDate < fifteenDaysAgo) {
+                    // 标记超过3天的记录为待删除
+                    if (recordDate < threeDaysAgo) {
                         keysToDelete.push(key);
                     }
                 }
@@ -245,7 +264,7 @@ async function saveToGist(data) {
         throw new Error('GitHub token 未配置');
     }
 
-    // 清理历史数据（保留15天内的记录）
+    // 清理历史数据（保留3天内的记录）
     const cleanedHistoryData = cleanOldHistoryData(data.historyData || {});
     
     const gistData = {
@@ -738,7 +757,14 @@ function startDictation() {
     // 过滤掉当天已背过的单词
     const doneWords = getTodayDoneWords();
     // 使用当前words列表进行过滤
-    shuffledWords = words.filter(w => !doneWords.includes(w));
+    let regularWords = words.filter(w => !doneWords.includes(w));
+    
+    // 获取需要重新测试的已掌握单词
+    const masteredWordsForTesting = getMasteredWordsDueForTesting();
+    masteredWordsInTest = [...masteredWordsForTesting]; // 保存已掌握单词列表用于后续处理
+    
+    // 合并常规单词和需要测试的已掌握单词
+    shuffledWords = [...regularWords, ...masteredWordsForTesting];
     shuffle(shuffledWords);
     current = 0;
     // total = 0; // 移除此行
@@ -763,6 +789,13 @@ function startDictation() {
         document.getElementById('result').innerHTML = '<span class="correct">今天的单词都已背过！</span>';
         setTimeout(endDictation, 2000);
     } else {
+        // 显示测试信息
+        const masteredCount = masteredWordsForTesting.length;
+        const regularCount = regularWords.length;
+        if (masteredCount > 0) {
+            const infoText = `本次测试包含：${regularCount} 个常规单词，${masteredCount} 个已掌握单词复习`;
+            document.getElementById('summary').textContent += ` ${infoText}`;
+        }
         nextWord();
     }
 }
@@ -797,37 +830,48 @@ function submitAnswer() {
 
     if (input === answer) {
         document.getElementById('result').innerHTML = '<span class="correct">正确！</span>';
-        // correct++; // 这个变量似乎没有在 summary 中使用
-        // 连续正确计数逻辑
-        correctStreaks[word] = (correctStreaks[word] || 0) + 1;
-        saveStreaks(); // 保存 streak 变化
+        
+        // 检查是否是已掌握单词的重新测试
+        if (masteredWordsInTest.includes(word)) {
+            // 已掌握单词测试正确，更新最后测试日期
+            const masteredWordItem = masteredWords.find(item => item.word === word);
+            if (masteredWordItem) {
+                masteredWordItem.lastTestDate = new Date().toISOString().split('T')[0];
+                document.getElementById('result').innerHTML += '<span style="color:blue;">（已掌握单词复习正确）</span>';
+            }
+        } else {
+            // 常规单词的连续正确计数逻辑
+            correctStreaks[word] = (correctStreaks[word] || 0) + 1;
+            saveStreaks(); // 保存 streak 变化
 
-        if (correctStreaks[word] >= 7) { // 修改为7次
-            // 连续正确达到7次，将单词移入已掌握列表
-            masteredWords.push({
-                word: word,
-                masteredDate: new Date().toISOString().split('T')[0] // YYYY-MM-DD 格式
-            });
-            
-            // 从当前学习列表中移除该单词
-            words = words.filter(w => w !== word);
-            saveWords(); // 保存更新后的 words 列表
+            if (correctStreaks[word] >= 7) { // 修改为7次
+                // 连续正确达到7次，将单词移入已掌握列表
+                masteredWords.push({
+                    word: word,
+                    masteredDate: new Date().toISOString().split('T')[0], // YYYY-MM-DD 格式
+                    lastTestDate: new Date().toISOString().split('T')[0] // 记录最后测试日期
+                });
+                
+                // 从当前学习列表中移除该单词
+                words = words.filter(w => w !== word);
+                saveWords(); // 保存更新后的 words 列表
 
-            // 从 streak 记录中移除该单词，保持记录干净
-            delete correctStreaks[word];
-            saveStreaks(); // 保存更新后的 streak 记录
+                // 从 streak 记录中移除该单词，保持记录干净
+                delete correctStreaks[word];
+                saveStreaks(); // 保存更新后的 streak 记录
 
-            document.getElementById('result').innerHTML += `<span style="color:blue;">（连续7次正确，已掌握）</span>`;
+                document.getElementById('result').innerHTML += `<span style="color:blue;">（连续7次正确，已掌握）</span>`;
 
-            current++;
-            setTimeout(() => {
-                if (current < shuffledWords.length) {
-                    nextWord();
-                } else {
-                    endDictation();
-                }
-            }, 600);
-            return;
+                current++;
+                setTimeout(() => {
+                    if (current < shuffledWords.length) {
+                        nextWord();
+                    } else {
+                        endDictation();
+                    }
+                }, 600);
+                return;
+            }
         }
 
         // 如果这个单词是第一次正确，才加入 doneWords
@@ -842,9 +886,23 @@ function submitAnswer() {
         wrongWords.push({input: input, word: word});
         saveTodayWrongWords(wrongWords); // 保存错误单词
 
-        // 连续正确计数逻辑：答错清零
-        correctStreaks[word] = 0;
-        saveStreaks(); // 保存 streak 变化
+        // 检查是否是已掌握单词的重新测试
+        if (masteredWordsInTest.includes(word)) {
+            // 已掌握单词测试错误，将其移回常规单词列表
+            const masteredWordIndex = masteredWords.findIndex(item => item.word === word);
+            if (masteredWordIndex !== -1) {
+                masteredWords.splice(masteredWordIndex, 1); // 从已掌握列表中移除
+                words.push(word); // 加入常规单词列表
+                saveWords(); // 保存更新后的words列表
+                correctStreaks[word] = 0; // 重置连续正确次数
+                saveStreaks();
+                document.getElementById('result').innerHTML += '<span style="color:red;">（已移回常规学习列表）</span>';
+            }
+        } else {
+            // 常规单词答错，连续正确计数清零
+            correctStreaks[word] = 0;
+            saveStreaks(); // 保存 streak 变化
+        }
     }
     updateSummary(); // 更新统计显示
     
@@ -894,7 +952,7 @@ async function saveToGistWithHistory(data) {
         throw new Error('GitHub token 未配置');
     }
 
-    // 清理历史数据（保留15天内的记录）
+    // 清理历史数据（保留3天内的记录）
     const cleanedHistoryData = cleanOldHistoryData(data.historyData || {});
     
     const gistData = {
@@ -1249,6 +1307,13 @@ async function loadDataFromGist() {
         words = data.words;
         correctStreaks = data.correctStreaks;
         masteredWords = data.masteredWords;
+        
+        // 为旧的已掌握单词添加lastTestDate字段（如果没有的话）
+        masteredWords.forEach(item => {
+            if (!item.lastTestDate) {
+                item.lastTestDate = item.masteredDate; // 使用掌握日期作为初始测试日期
+            }
+        });
         wrongWords = data.todayWrongWords;
         todayAttempts = data.todayAttempts;
         todayAttemptedWords = new Set(data.todayAttemptedWords);
