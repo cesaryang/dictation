@@ -59,6 +59,17 @@
         </div>
     </div>
     
+    <div id="dictationArea" style="margin-top:20px; display:none;">
+        <span>请输入你听到的单词：</span>
+        <input type="text" id="wordInput" autocomplete="off">
+        <button id="repeatBtn" type="button">重听</button>
+        <div id="result"></div>
+    </div>
+    <div id="summary"></div>
+    <!-- 在 summary 下方增加一个错误单词列表的显示区域 -->
+    <div id="wrongList" style="margin-top:20px; color:#b22222;"></div>
+
+
     <!-- 添加新词功能 (折叠式) -->
     <div style="margin-top: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; background-color: #f0f8ff;">
         <div>
@@ -77,15 +88,6 @@
             </div>
         </div>
     </div>
-    <div id="dictationArea" style="margin-top:20px; display:none;">
-        <span>请输入你听到的单词：</span>
-        <input type="text" id="wordInput" autocomplete="off">
-        <button id="repeatBtn" type="button">重听</button>
-        <div id="result"></div>
-    </div>
-    <div id="summary"></div>
-    <!-- 在 summary 下方增加一个错误单词列表的显示区域 -->
-    <div id="wrongList" style="margin-top:20px; color:#b22222;"></div>
 
     <script>
 let words = []; // 存储从文件加载的原始单词列表
@@ -95,6 +97,9 @@ let current = 0;
 let isStarted = false;
 let wrongWords = []; // 存储当天听写错误的单词
 const synth = window.speechSynthesis;
+
+// Chrome浏览器语音合成修复
+let isUserInteracted = false; // 跟踪用户是否已经交互过
 
 // 新增：存储每个单词的连续正确次数
 let correctStreaks = {};
@@ -532,18 +537,43 @@ function shuffle(array) {
 }
 
 function speakWord(word) {
+    // Chrome浏览器需要用户先交互才能播放语音
+    if (!isUserInteracted) {
+        return;
+    }
+    
+    // Chrome特定：停止当前语音播放
     if (synth.speaking) {
         synth.cancel();
+        
+        // Chrome需要短暂延迟才能重新播放
+        setTimeout(() => {
+            speakWordInternal(word);
+        }, 100);
+        return;
     }
+    
+    speakWordInternal(word);
+}
 
+function speakWordInternal(word) {
     const voices = synth.getVoices();
+    
     if (voices.length === 0) {
         // Voices are loaded asynchronously. Wait for them and retry.
-        synth.onvoiceschanged = () => speakWord(word);
+        synth.onvoiceschanged = () => {
+            speakWordInternal(word);
+        };
         return;
     }
 
-    const voice = voices.find(v => v.name.includes('Google US English')) || voices.find(v => v.lang.startsWith('en-US')) || voices[0];
+    // 优先使用Google TTS语音
+    const voice = voices.find(v => v.name.includes('Google US English')) || 
+                 voices.find(v => v.name.includes('Google')) || 
+                 voices.find(v => v.name.toLowerCase().includes('google')) ||
+                 voices.find(v => v.lang.startsWith('en-US') && !v.localService) ||
+                 voices.find(v => v.lang.startsWith('en-US')) || 
+                 voices[0];
     
     const utter = new SpeechSynthesisUtterance(word);
     utter.lang = 'en-US';
@@ -551,24 +581,45 @@ function speakWord(word) {
         utter.voice = voice;
     }
     utter.rate = 1.0;
-    utter.onerror = (event) => console.error("Speech synthesis error:", event.error);
-
-    synth.speak(utter);
+    utter.volume = 1.0;
+    utter.pitch = 1.0;
+    
+    utter.onerror = (event) => {
+        if (event.error !== 'interrupted') {
+            console.error("Speech synthesis error:", event.error);
+        }
+    };
+    
+    // Chrome特定：确保语音队列清空
+    synth.cancel();
+    
+    // 短暂延迟后播放
+    setTimeout(() => {
+        synth.speak(utter);
+    }, 50);
 }
 
-// 新增：预加载单词发音
+// 优化的语音队列管理
+let speechQueue = [];
+let isSpeechActive = false;
+
+function resumeSpeechIfNeeded() {
+    // Chrome特定：检查并恢复语音合成
+    if (synth.paused) {
+        synth.resume();
+    }
+}
+
+// 定期检查语音合成状态（Chrome兼容性）
+setInterval(() => {
+    if (isUserInteracted && synth.paused) {
+        resumeSpeechIfNeeded();
+    }
+}, 1000);
+
+// 新增：预加载单词发音（已废弃，在Chrome中可能导致问题）
 function preloadAudio(wordList) {
-    const voices = synth.getVoices();
-    const voice = voices.find(v => v.name.includes('Google US English')) || voices[0]; // 使用相同的语音
-    wordList.forEach(word => {
-        const utter = new SpeechSynthesisUtterance(word);
-        utter.lang = 'en-US';
-        if (voice) utter.voice = voice;
-        utter.volume = 0; // 设置音量为0，进行预加载
-        // 浏览器会自动将这些utterance加入队列并处理
-        synth.speak(utter);
-    });
-    console.log(`尝试预加载 ${wordList.length} 个单词的发音...`); // 可选：在控制台输出提示
+    // 在Chrome中不进行预加载，避免语音队列问题
 }
 
 
@@ -754,6 +805,9 @@ function updateSummary() {
 }
 
 function startDictation() {
+    // 标记用户已交互，启用语音功能（Chrome兼容性）
+    isUserInteracted = true;
+    
     // 过滤掉当天已背过的单词
     const doneWords = getTodayDoneWords();
     // 使用当前words列表进行过滤
@@ -1201,6 +1255,8 @@ document.getElementById('testNewWordBtn').addEventListener('click', function() {
         return;
     }
     
+    // 标记用户已交互（Chrome兼容性）
+    isUserInteracted = true;
     speakWord(newWord);
 });
 
@@ -1334,8 +1390,29 @@ async function loadDataFromGist() {
 }
 
 
+
+// Chrome浏览器用户交互监听（启用语音合成）
+function setupUserInteractionListeners() {
+    const events = ['click', 'keydown', 'touchstart'];
+    events.forEach(eventType => {
+        document.addEventListener(eventType, function markUserInteraction() {
+            if (!isUserInteracted) {
+                isUserInteracted = true;
+                
+                // 移除监听器（只需要记录一次）
+                events.forEach(et => {
+                    document.removeEventListener(et, markUserInteraction);
+                });
+            }
+        }, { once: true });
+    });
+}
+
 // 页面加载时恢复数据
 window.addEventListener('load', async function() {
+    
+    // 设置用户交互监听器（Chrome兼容性）
+    setupUserInteractionListeners();
     
     // 清理本地过期的历史数据
     cleanLocalStorageHistory();
